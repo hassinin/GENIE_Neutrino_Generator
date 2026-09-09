@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+
+<alg_conf>
+
+<!-- Configuration for the Valencia2020MECPXSec algorithm.
+     Calculates 2p2h and 3p3h differential cross sections using Valencia 2020 exclusive model.
+     Reference: J.E. Sobczyk, J. Nieves, F. Sanchez, PRC 102, 024601 (2020).
+-->
+
+  <param_set name="Default">
+
+    <param type="double" name="MEC-CC-XSecScale"> 1.000 </param>
+    <param type="double" name="MEC-NC-XSecScale"> 1.000 </param>
+    <param type="bool"   name="Include3p3h">      true  </param>
+
+    <param type="alg" name="HadronTensorAlg">        genie::Valencia2020HadronTensorModel/Default </param>
+    <param type="alg" name="NumericalIntegrationAlg"> genie::MECXSec/Default                      </param>
+
+  </param_set>
+
+</alg_conf>

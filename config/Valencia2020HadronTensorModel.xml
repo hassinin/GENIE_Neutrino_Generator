@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+
+<alg_conf>
+
+<!-- Configuration for the Valencia2020HadronTensorModel algorithm.
+     Provides microscopic channel-decomposed hadron tensors for 2p2h (pp, np, pn) and 3p3h.
+     Reference: J.E. Sobczyk, J. Nieves, F. Sanchez, PRC 102, 024601 (2020).
+-->
+
+  <param_set name="Default">
+
+    <param type="bool" name="WarnIfMissing"> false </param>
+    <param type="string" name="DataPathType"> relative </param>
+    <param type="string" name="DataPath"> data/evgen/hadron_tensors/valencia2020 </param>
+
+    <!-- 12C (1000060120) -->
+    <param type="string" name="MEC_Valencia2020_pp@Pdg=1000060120"> HadTensor120-Valencia2020-1000060120-pp.dat </param>
+    <param type="string" name="MEC_Valencia2020_np@Pdg=1000060120"> HadTensor120-Valencia2020-1000060120-np.dat </param>
+    <param type="string" name="MEC_Valencia2020_pn@Pdg=1000060120"> HadTensor120-Valencia2020-1000060120-pn.dat </param>
+    <param type="string" name="MEC_Valencia2020_3p3h@Pdg=1000060120"> HadTensor120-Valencia2020-1000060120-3p3h.dat </param>
+
+    <!-- 16O (1000080160) -->
+    <param type="string" name="MEC_Valencia2020_pp@Pdg=1000080160"> HadTensor120-Valencia2020-1000080160-pp.dat </param>
+    <param type="string" name="MEC_Valencia2020_np@Pdg=1000080160"> HadTensor120-Valencia2020-1000080160-np.dat </param>
+    <param type="string" name="MEC_Valencia2020_pn@Pdg=1000080160"> HadTensor120-Valencia2020-1000080160-pn.dat </param>
+    <param type="string" name="MEC_Valencia2020_3p3h@Pdg=1000080160"> HadTensor120-Valencia2020-1000080160-3p3h.dat </param>
+
+    <!-- 40Ca (1000200400) - Also used as proxy for 40Ar (1000180400) -->
+    <param type="string" name="MEC_Valencia2020_pp@Pdg=1000200400"> HadTensor120-Valencia2020-1000200400-pp.dat </param>
+    <param type="string" name="MEC_Valencia2020_np@Pdg=1000200400"> HadTensor120-Valencia2020-1000200400-np.dat </param>
+    <param type="string" name="MEC_Valencia2020_pn@Pdg=1000200400"> HadTensor120-Valencia2020-1000200400-pn.dat </param>
+    <param type="string" name="MEC_Valencia2020_3p3h@Pdg=1000200400"> HadTensor120-Valencia2020-1000200400-3p3h.dat </param>
+
+  </param_set>
+
+</alg_conf>

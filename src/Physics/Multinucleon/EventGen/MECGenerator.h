@@ -61,6 +61,8 @@ private:
   void    SelectNSVLeptonKinematics         (GHepRecord * event) const;
   void    SelectSuSALeptonKinematics        (GHepRecord * event) const;
   void    GenerateNSVInitialHadrons         (GHepRecord * event) const;
+  void    SelectValencia2020LeptonKinematics(GHepRecord * event) const;
+  void    GenerateValencia2020Hadrons       (GHepRecord * event) const;
   PDGCodeList NucleonClusterConstituents    (int pdgc)           const;
 
   // Helper function that computes the maximum differential cross section

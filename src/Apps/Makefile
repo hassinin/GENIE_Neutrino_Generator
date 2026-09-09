@@ -35,7 +35,8 @@ TGT_BASE =  gevgen             \
             gmkhedissf         \
             gcalchedisdiffxsec \
             gmkphotonsf        \
-            gconfigdump
+            gconfigdump        \
+            gtest_valencia2020
 
 ifeq ($(strip $(GOPT_ENABLE_FNAL)),YES)
 TGT_BASE += gevgen_fnal
@@ -286,6 +287,10 @@ $(GENIE_BIN_PATH)/gconfigdump: gConfigDump.o $(call find_libs,gconfigdump)
 	@echo "** Building gconfigdump"
 	$(LD) $(LDFLAGS) gConfigDump.o $(LIBRARIES) -o $(GENIE_BIN_PATH)/gconfigdump
 
+
+$(GENIE_BIN_PATH)/gtest_valencia2020: gTestValencia2020.o $(call find_libs,gtest_valencia2020)
+	@echo "** Building gtest_valencia2020"
+	$(LD) $(LDFLAGS) gTestValencia2020.o $(LIBRARIES) -o $(GENIE_BIN_PATH)/gtest_valencia2020
 
 # CLEANING-UP
 

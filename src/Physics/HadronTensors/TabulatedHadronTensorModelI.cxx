@@ -140,6 +140,10 @@ namespace {
     else if ( htt == genie::kHT_MEC_Fullpn ) return "MEC_Fullpn";
     else if ( htt == genie::kHT_MEC_DeltaAll ) return "MEC_DeltaAll";
     else if ( htt == genie::kHT_MEC_Deltapn ) return "MEC_Deltapn";
+    else if ( htt == genie::kHT_MEC_Valencia2020_pp ) return "MEC_Valencia2020_pp";
+    else if ( htt == genie::kHT_MEC_Valencia2020_np ) return "MEC_Valencia2020_np";
+    else if ( htt == genie::kHT_MEC_Valencia2020_pn ) return "MEC_Valencia2020_pn";
+    else if ( htt == genie::kHT_MEC_Valencia2020_3p3h ) return "MEC_Valencia2020_3p3h";
     else if ( htt == genie::kHT_MEC_EM ) return "MEC_EM";
     else if ( htt == genie::kHT_MEC_EM_pn ) return "MEC_EM_pn";
     else if ( htt == genie::kHT_MEC_EM_pp ) return "MEC_EM_pp";

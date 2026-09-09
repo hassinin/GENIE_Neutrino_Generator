@@ -32,9 +32,9 @@
 #include "Physics/Multinucleon/EventGen/MECGenerator.h"
 #include "Physics/Multinucleon/XSection/MECUtils.h"
 #include "Physics/Multinucleon/XSection/SuSAv2MECPXSec.h"
+#include "Physics/Multinucleon/XSection/Valencia2020MECPXSec.h"
 
 #include "Physics/NuclearState/NuclearModelI.h"
-//#include "Physics/Multinucleon/XSection/MECHadronTensor.h"
 #include "Physics/HadronTensors/HadronTensorI.h"
 #include "Framework/Numerical/RandomGen.h"
 #include "Framework/ParticleData/PDGCodes.h"
@@ -104,6 +104,11 @@ void MECGenerator::ProcessEventRecord(GHepRecord * event) const
       // Note: this method in `MECTensor/MECTensorGenerator.cxx` appeared to be a straight
       // copy of an earlier version of the `DecayNucleonCluster` method here - but, watch
       // for this...
+      this -> DecayNucleonCluster(event);
+  } else if (fXSecModel->Id().Name() == "genie::Valencia2020MECPXSec") {
+      this -> SelectValencia2020LeptonKinematics(event);
+      this -> AddTargetRemnant(event);
+      this -> GenerateValencia2020Hadrons(event);
       this -> DecayNucleonCluster(event);
   }
   else {
@@ -1318,6 +1323,157 @@ void MECGenerator::GenerateNSVInitialHadrons(GHepRecord * event) const
     event->AddParticle(p1);
 
     interaction->KinePtr()->SetHadSystP4(p4final_cluster);
+}
+//___________________________________________________________________________
+void MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
+{
+  Interaction* interaction = event->Summary();
+  Kinematics* kinematics = interaction->KinePtr();
+
+  double Enu = interaction->InitState().ProbeE(kRfLab);
+  int NuPDG = interaction->InitState().ProbePdg();
+
+  TLorentzVector v4(*event->Probe()->X4());
+  TLorentzVector tempp4(0., 0., 0., 0.);
+
+  double Costh = 0.0;
+  double CosthMax = 1.0;
+  double CosthMin = -1.0;
+
+  double T = 0.0;
+  double LepMass = interaction->FSPrimLepton()->Mass();
+  double TMax = Enu - LepMass;
+  double TMin = 0.0;
+
+  double Plep = 0.0;
+  double Elep = 0.0;
+  double Q0 = 0.0;
+  double Q3 = 0.0;
+  double Q2 = 0.0;
+
+  double q3max = (fQ3Max > 0.0) ? fQ3Max : 1.2;
+
+  if (Enu < q3max) {
+    TMin = 0.;
+    CosthMin = -1.;
+  } else {
+    TMin = TMath::Sqrt(TMath::Power(LepMass, 2) + TMath::Power(Enu - q3max, 2)) - LepMass;
+    CosthMin = TMath::Sqrt(1. - TMath::Power(q3max / Enu, 2));
+  }
+
+  RandomGen* rnd = RandomGen::Instance();
+  bool accept = false;
+  unsigned int iter = 0;
+  unsigned int maxIter = kRjMaxIterations;
+
+  double XSecMax = utils::mec::GetMaxXSecTlctl(*fXSecModel, *interaction);
+
+  while (!accept) {
+    ++iter;
+    if (iter > maxIter) {
+      LOG("MEC", pWARN) << "Valencia2020: Couldn't select valid (Tl, Costh) after " << iter << " iterations";
+      event->EventFlags()->SetBitNumber(kKineGenErr, true);
+      genie::exceptions::EVGThreadException exception;
+      exception.SetReason("Couldn't select lepton kinematics for Valencia2020");
+      exception.SwitchOnFastForward();
+      throw exception;
+    }
+
+    T = TMin + (TMax - TMin) * rnd->RndKine().Rndm();
+    Costh = CosthMin + (CosthMax - CosthMin) * rnd->RndKine().Rndm();
+
+    Plep = TMath::Sqrt(T * (T + 2.0 * LepMass));
+    Q3 = TMath::Sqrt(Plep * Plep + Enu * Enu - 2.0 * Plep * Enu * Costh);
+    Q0 = Enu - (T + LepMass);
+    Q2 = Q3 * Q3 - Q0 * Q0;
+
+    if (Q3 < q3max && Q2 >= genie::controls::kMinQ2Limit) {
+      kinematics->SetKV(kKVTl, T);
+      kinematics->SetKV(kKVctl, Costh);
+
+      const Valencia2020MECPXSec* vXSec = dynamic_cast<const Valencia2020MECPXSec*>(fXSecModel);
+      double x_pp = 0., x_np = 0., x_pn = 0., x_3p3h = 0., x_tot = 0.;
+      if (vXSec) {
+        vXSec->GetChannelCrossSections(interaction, x_pp, x_np, x_pn, x_3p3h, x_tot);
+      } else {
+        x_tot = fXSecModel->XSec(interaction, kPSTlctl);
+      }
+
+      if (x_tot > XSecMax) {
+        XSecMax = x_tot * 1.2;
+      }
+
+      accept = (x_tot > XSecMax * rnd->RndKine().Rndm());
+
+      if (accept) {
+        double sum_2p2h = x_pp + x_np + x_pn;
+        double frac_pp = (sum_2p2h > 0.) ? (x_pp / sum_2p2h) : 0.70;
+
+        double r_pair = rnd->RndKine().Rndm();
+        if (interaction->ProcInfo().IsWeakCC()) {
+          if (NuPDG > 0) {
+            if (r_pair <= frac_pp) {
+              // neutrino CC: pp outgoing comes from initial np pair
+              event->AddParticle(kPdgClusterNP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNP);
+            } else {
+              // neutrino CC: np/pn outgoing comes from initial nn pair
+              event->AddParticle(kPdgClusterNN, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNN);
+            }
+          } else {
+            if (r_pair <= frac_pp) {
+              // antineutrino CC: nn outgoing comes from initial np pair
+              event->AddParticle(kPdgClusterNP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNP);
+            } else {
+              // antineutrino CC: np/pn outgoing comes from initial pp pair
+              event->AddParticle(kPdgClusterPP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterPP);
+            }
+          }
+        } else {
+          event->AddParticle(kPdgClusterNP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+          interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNP);
+        }
+      }
+    }
+  }
+
+  double PlepZ = Plep * Costh;
+  double PlepXY = Plep * TMath::Sqrt(std::max(0., 1. - Costh * Costh));
+  double phi = 2. * kPi * rnd->RndLep().Rndm();
+  double PlepX = PlepXY * TMath::Cos(phi);
+  double PlepY = PlepXY * TMath::Sin(phi);
+
+  TVector3 unit_nudir = event->Probe()->P4()->Vect().Unit();
+  TVector3 p3l(PlepX, PlepY, PlepZ);
+  p3l.RotateUz(unit_nudir);
+
+  Elep = TMath::Sqrt(LepMass * LepMass + p3l.Mag2());
+  TLorentzVector p4l(p3l, Elep);
+
+  int pdgc = interaction->FSPrimLepton()->PdgCode();
+  int momidx = event->ProbePosition();
+
+  Q0 = Enu - Elep;
+  Q2 = Q3 * Q3 - Q0 * Q0;
+  double gy = Q0 / Enu;
+  double gx = kinematics::Q2YtoX(Enu, 2 * kNucleonMass, Q2, gy);
+  double gW = kinematics::XYtoW(Enu, 2 * kNucleonMass, gx, gy);
+
+  interaction->KinePtr()->SetQ2(Q2, true);
+  interaction->KinePtr()->Sety(gy, true);
+  interaction->KinePtr()->Setx(gx, true);
+  interaction->KinePtr()->SetW(gW, true);
+  interaction->KinePtr()->SetFSLeptonP4(p4l);
+
+  event->AddParticle(pdgc, kIStStableFinalState, momidx, -1, -1, -1, p4l, v4);
+}
+//___________________________________________________________________________
+void MECGenerator::GenerateValencia2020Hadrons(GHepRecord * event) const
+{
+  this->GenerateNSVInitialHadrons(event);
 }
 //___________________________________________________________________________
 void MECGenerator::Configure(const Registry & config)
