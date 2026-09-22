@@ -109,7 +109,7 @@ void MECGenerator::ProcessEventRecord(GHepRecord * event) const
       this -> SelectValencia2020LeptonKinematics(event);
       this -> AddTargetRemnant(event);
       this -> GenerateValencia2020Hadrons(event);
-      this -> DecayNucleonCluster(event);
+      this -> DecayValencia2020NucleonCluster(event);
   }
   else {
       LOG("MECGenerator",pFATAL) <<
@@ -1474,6 +1474,139 @@ void MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
 void MECGenerator::GenerateValencia2020Hadrons(GHepRecord * event) const
 {
   this->GenerateNSVInitialHadrons(event);
+}
+//___________________________________________________________________________
+void MECGenerator::DecayValencia2020NucleonCluster(GHepRecord * event) const
+{
+  LOG("MEC", pINFO) << "Decaying Valencia 2020 nucleon cluster...";
+
+  int nucleon_cluster_id = 5;
+  GHepParticle * nucleon_cluster = event->Particle(nucleon_cluster_id);
+  assert(nucleon_cluster);
+
+  int cluster_pdg = nucleon_cluster->Pdg();
+  int pdg_prim = 0;
+  int pdg_spec = 0;
+  RandomGen * rnd = RandomGen::Instance();
+
+  if (cluster_pdg == kPdgClusterPP) {
+    pdg_prim = kPdgProton;
+    pdg_spec = kPdgProton;
+  } else if (cluster_pdg == kPdgClusterNN) {
+    pdg_prim = kPdgNeutron;
+    pdg_spec = kPdgNeutron;
+  } else if (cluster_pdg == kPdgClusterNP) {
+    Interaction * interaction = event->Summary();
+    int nu_pdg = interaction->InitState().ProbePdg();
+    bool is_nu = (nu_pdg > 0);
+    double r_chan = rnd->RndHadro().Rndm();
+
+    if (is_nu) {
+      // In nu_mu CC on nn pair: direct diagram has proton as primary struck nucleon
+      if (r_chan < 0.65) {
+        pdg_prim = kPdgProton;
+        pdg_spec = kPdgNeutron;
+      } else {
+        pdg_prim = kPdgNeutron;
+        pdg_spec = kPdgProton;
+      }
+    } else {
+      if (r_chan < 0.65) {
+        pdg_prim = kPdgNeutron;
+        pdg_spec = kPdgProton;
+      } else {
+        pdg_prim = kPdgProton;
+        pdg_spec = kPdgNeutron;
+      }
+    }
+  } else {
+    PDGCodeList pdgv = this->NucleonClusterConstituents(cluster_pdg);
+    pdg_prim = pdgv[0];
+    pdg_spec = pdgv[1];
+  }
+
+  TLorentzVector * p4d = nucleon_cluster->GetP4();
+  TLorentzVector * v4d = nucleon_cluster->GetX4();
+  double W = p4d->M();
+
+  double m_prim = PDGLibrary::Instance()->Find(pdg_prim)->Mass();
+  double m_spec = PDGLibrary::Instance()->Find(pdg_spec)->Mass();
+  double sum_mass = m_prim + m_spec;
+
+  if (W <= sum_mass) {
+    LOG("MEC", pWARN) << "Valencia2020: Cluster mass W = " << W << " <= threshold " << sum_mass;
+    this->DecayNucleonCluster(event);
+    delete p4d;
+    delete v4d;
+    return;
+  }
+
+  double E_cm = W;
+  double pstar2 = (E_cm*E_cm - sum_mass*sum_mass) * (E_cm*E_cm - (m_prim - m_spec)*(m_prim - m_spec)) / (4.0 * E_cm * E_cm);
+  double pstar = (pstar2 > 0.) ? TMath::Sqrt(pstar2) : 0.0;
+  double E_prim_cm = TMath::Sqrt(pstar*pstar + m_prim*m_prim);
+  double E_spec_cm = TMath::Sqrt(pstar*pstar + m_spec*m_spec);
+
+  TVector3 beta = p4d->BoostVector();
+
+  // Generate spectator trial momentum in Lab using target Fermi motion
+  TVector3 p_fermi(0, 0, 0);
+  GHepParticle * tgt_nuc = event->TargetNucleus();
+  if (tgt_nuc && fNuclModel) {
+    Target tgt(tgt_nuc->Pdg());
+    tgt.SetHitNucPdg(pdg_spec);
+    fNuclModel->GenerateNucleon(tgt);
+    p_fermi = fNuclModel->Momentum3();
+  } else {
+    double kF = 0.221;
+    double p_mag = kF * std::cbrt(rnd->RndHadro().Rndm());
+    double costh = -1.0 + 2.0 * rnd->RndHadro().Rndm();
+    double phi = 2.0 * kPi * rnd->RndHadro().Rndm();
+    p_fermi.SetXYZ(p_mag * TMath::Sqrt(std::max(0., 1. - costh*costh)) * TMath::Cos(phi),
+                   p_mag * TMath::Sqrt(std::max(0., 1. - costh*costh)) * TMath::Sin(phi),
+                   p_mag * costh);
+  }
+
+  // Soft virtual pion exchange momentum kick along momentum transfer q
+  GHepParticle * neutrino = event->Probe();
+  GHepParticle * lepton = event->FinalStatePrimaryLepton();
+  TVector3 q_dir(0, 0, 1);
+  if (neutrino && lepton) {
+    q_dir = (neutrino->P4()->Vect() - lepton->P4()->Vect()).Unit();
+  }
+
+  double delta_mag = rnd->RndHadro().Exp(0.080); // ~80 MeV/c kick
+  double delta_costh = 0.5 + 0.5 * rnd->RndHadro().Rndm();
+  double delta_phi = 2.0 * kPi * rnd->RndHadro().Rndm();
+  TVector3 delta_vec(delta_mag * TMath::Sqrt(std::max(0., 1. - delta_costh*delta_costh)) * TMath::Cos(delta_phi),
+                     delta_mag * TMath::Sqrt(std::max(0., 1. - delta_costh*delta_costh)) * TMath::Sin(delta_phi),
+                     delta_mag * delta_costh);
+  delta_vec.RotateUz(q_dir);
+
+  TVector3 p_spec_trial = p_fermi + delta_vec;
+  double E_spec_trial = TMath::Sqrt(m_spec*m_spec + p_spec_trial.Mag2());
+  TLorentzVector p4_spec_trial(p_spec_trial, E_spec_trial);
+
+  // Boost trial spectator into cluster CM frame
+  p4_spec_trial.Boost(-beta);
+  TVector3 n_spec_cm = (p4_spec_trial.Vect().Mag() > 0.) ? p4_spec_trial.Vect().Unit() : TVector3(0, 0, -1);
+
+  // On-shell CM 4-momenta
+  TLorentzVector p4_spec_cm(pstar * n_spec_cm, E_spec_cm);
+  TLorentzVector p4_prim_cm(-pstar * n_spec_cm, E_prim_cm);
+
+  // Boost back to Lab frame
+  p4_spec_cm.Boost(beta);
+  p4_prim_cm.Boost(beta);
+
+  // Insert hadrons into event record
+  TLorentzVector v4(*v4d);
+  GHepStatus_t ist = kIStHadronInTheNucleus;
+  event->AddParticle(pdg_prim, ist, nucleon_cluster_id, -1, -1, -1, p4_prim_cm, v4);
+  event->AddParticle(pdg_spec, ist, nucleon_cluster_id, -1, -1, -1, p4_spec_cm, v4);
+
+  delete p4d;
+  delete v4d;
 }
 //___________________________________________________________________________
 void MECGenerator::Configure(const Registry & config)
