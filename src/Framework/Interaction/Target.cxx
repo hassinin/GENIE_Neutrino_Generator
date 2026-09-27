@@ -284,7 +284,7 @@ bool Target::HitNucIsSet(void) const
 {
   bool ok =
      pdg::IsNucleon(fHitNucPDG)          ||
-     pdg::Is2NucleonCluster (fHitNucPDG);
+     pdg::IsNucleonCluster (fHitNucPDG);
 
   return ok;
 }
@@ -353,7 +353,7 @@ bool Target::ForceHitNucValidity(void)
 
   bool valid =
       pdg::IsNucleon(fHitNucPDG)          ||
-      pdg::Is2NucleonCluster (fHitNucPDG) ||
+      pdg::IsNucleonCluster (fHitNucPDG) ||
       (fHitNucPDG==0); /* not set */
 
   return valid;

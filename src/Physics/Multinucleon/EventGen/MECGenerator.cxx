@@ -13,6 +13,11 @@
 
 #include <TMath.h>
 #include <memory>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include "Physics/Multinucleon/EventGen/Valencia2020Kinematics.h"
+#include "Physics/Multinucleon/EventGen/Valencia2020NuWro.h"
 #include "Math/Minimizer.h"
 #include "Math/Factory.h"
 
@@ -29,6 +34,7 @@
 #include "Framework/GHEP/GHepRecord.h"
 #include "Framework/Messenger/Messenger.h"
 #include "Physics/Common/PrimaryLeptonUtils.h"
+#include "Physics/Common/VertexGenerator.h"
 #include "Physics/Multinucleon/EventGen/MECGenerator.h"
 #include "Physics/Multinucleon/XSection/MECUtils.h"
 #include "Physics/Multinucleon/XSection/SuSAv2MECPXSec.h"
@@ -106,10 +112,8 @@ void MECGenerator::ProcessEventRecord(GHepRecord * event) const
       // for this...
       this -> DecayNucleonCluster(event);
   } else if (fXSecModel->Id().Name() == "genie::Valencia2020MECPXSec") {
-      this -> SelectValencia2020LeptonKinematics(event);
-      this -> AddTargetRemnant(event);
-      this -> GenerateValencia2020Hadrons(event);
-      this -> DecayValencia2020NucleonCluster(event);
+      const Valencia2020Selection selection = this->SelectValencia2020LeptonKinematics(event);
+      this->GenerateValencia2020Hadrons(event, selection);
   }
   else {
       LOG("MECGenerator",pFATAL) <<
@@ -1325,10 +1329,14 @@ void MECGenerator::GenerateNSVInitialHadrons(GHepRecord * event) const
     interaction->KinePtr()->SetHadSystP4(p4final_cluster);
 }
 //___________________________________________________________________________
-void MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
+MECGenerator::Valencia2020Selection
+MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
 {
+  Valencia2020Selection selection;
   Interaction* interaction = event->Summary();
   Kinematics* kinematics = interaction->KinePtr();
+  const auto vXSec = dynamic_cast<const Valencia2020MECPXSec*>(fXSecModel);
+  const bool nuwro = vXSec && vXSec->NuWroCompatible();
 
   double Enu = interaction->InitState().ProbeE(kRfLab);
   int NuPDG = interaction->InitState().ProbePdg();
@@ -1366,7 +1374,19 @@ void MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
   unsigned int iter = 0;
   unsigned int maxIter = kRjMaxIterations;
 
-  double XSecMax = utils::mec::GetMaxXSecTlctl(*fXSecModel, *interaction);
+  const auto key = std::make_tuple(interaction->InitState().Tgt().Pdg(), NuPDG, Enu, fXSecModel);
+  auto found = fValenciaMaxima.find(key);
+  double XSecMax;
+  if (found != fValenciaMaxima.end()) XSecMax = found->second;
+  else {
+    XSecMax = utils::mec::GetMaxXSecTlctl(*fXSecModel, *interaction, 0.001, 2.0);
+    // Bound the cache for continuous-energy beams; never approximate energy keys.
+    if (fValenciaMaxima.size() >= 256) fValenciaMaxima.clear();
+    fValenciaMaxima[key] = XSecMax;
+  }
+  if (!(XSecMax > 0.) || !std::isfinite(XSecMax))
+    throw std::runtime_error("Valencia2020: invalid rejection envelope");
+
 
   while (!accept) {
     ++iter;
@@ -1387,7 +1407,7 @@ void MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
     Q0 = Enu - (T + LepMass);
     Q2 = Q3 * Q3 - Q0 * Q0;
 
-    if (Q3 < q3max && Q2 >= genie::controls::kMinQ2Limit) {
+    if (Q3 < q3max && (nuwro || Q2 >= genie::controls::kMinQ2Limit)) {
       kinematics->SetKV(kKVTl, T);
       kinematics->SetKV(kKVctl, Costh);
 
@@ -1400,42 +1420,69 @@ void MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
       }
 
       if (x_tot > XSecMax) {
-        XSecMax = x_tot * 1.2;
+        LOG("MEC", pFATAL) << "Valencia2020 rejection bound exceeded: "
+          << x_tot << " > " << XSecMax << "; stop to avoid biased events.";
+        throw std::runtime_error("Valencia2020 rejection envelope exceeded");
       }
 
       accept = (x_tot > XSecMax * rnd->RndKine().Rndm());
 
       if (accept) {
-        double sum_2p2h = x_pp + x_np + x_pn;
-        double frac_pp = (sum_2p2h > 0.) ? (x_pp / sum_2p2h) : 0.70;
-
-        double r_pair = rnd->RndKine().Rndm();
-        if (interaction->ProcInfo().IsWeakCC()) {
-          if (NuPDG > 0) {
-            if (r_pair <= frac_pp) {
-              // neutrino CC: pp outgoing comes from initial np pair
-              event->AddParticle(kPdgClusterNP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
-              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNP);
-            } else {
-              // neutrino CC: np/pn outgoing comes from initial nn pair
-              event->AddParticle(kPdgClusterNN, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
-              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNN);
-            }
-          } else {
-            if (r_pair <= frac_pp) {
-              // antineutrino CC: nn outgoing comes from initial np pair
-              event->AddParticle(kPdgClusterNP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
-              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNP);
-            } else {
-              // antineutrino CC: np/pn outgoing comes from initial pp pair
-              event->AddParticle(kPdgClusterPP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
-              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterPP);
-            }
-          }
-        } else {
-          event->AddParticle(kPdgClusterNP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
-          interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNP);
+        const double weights[] = {x_pp, x_np, x_pn, x_3p3h};
+        double pick = rnd->RndKine().Rndm()*x_tot;
+        selection.channel = 3;
+        for (int ch = 0; ch < 4; ++ch) {
+          pick -= weights[ch];
+          if (pick < 0.) { selection.channel = ch; break; }
         }
+        const bool antinu = NuPDG < 0;
+        const int proton = kPdgProton, neutron = kPdgNeutron;
+        if (selection.channel == 0) {
+          selection.initial = {neutron, proton};
+          selection.final = {proton, proton};
+        } else if (selection.channel < 3) {
+          selection.initial = {neutron, neutron};
+          selection.final = selection.channel == 1 ?
+            std::vector<int>{neutron, proton} : std::vector<int>{proton, neutron};
+        } else {
+          const Target& target = interaction->InitState().Tgt();
+          double charge_weights[4], total = 0.;
+          for (int z = 0; z <= 3; ++z) {
+            charge_weights[z] = nuwro ?
+              utils::valencia2020::NuWroThreeBodyChargeWeight(target.Z(),target.N(),z,antinu) :
+              utils::valencia2020::ThreeBodyChargeWeight(target.Z(),target.N(),z,antinu);
+            total += charge_weights[z];
+          }
+          if (!(total > 0.)) throw std::runtime_error("Valencia2020: no allowed 3p3h charge state");
+          double draw = rnd->RndKine().Rndm()*total;
+          int finalZ = 0;
+          for (; finalZ < 3; ++finalZ) {
+            draw -= charge_weights[finalZ];
+            if (draw < 0.) break;
+          }
+          const int initialZ = finalZ + (antinu ? 1 : -1);
+          selection.initial.assign(3, neutron);
+          selection.final.assign(3, neutron);
+          for (int i = 0; i < initialZ; ++i) selection.initial[i] = proton;
+          for (int i = 0; i < finalZ; ++i) selection.final[i] = proton;
+        }
+        // Charge-conjugate the 2p2h labels, preserving forward/backward roles.
+        if (antinu && selection.channel < 3) {
+          for (int& pdgc : selection.initial) pdgc = pdg::SwitchProtonNeutron(pdgc);
+          for (int& pdgc : selection.final) pdgc = pdg::SwitchProtonNeutron(pdgc);
+        }
+        // NuWro's first incoming member remains a neutron for nn production.
+        // Its species sets the common kinetic Fermi threshold.
+        if (nuwro && antinu && selection.channel == 0)
+          selection.initial = {neutron,proton};
+        const int initialZ = std::count(selection.initial.begin(), selection.initial.end(), proton);
+        const int cluster = (selection.initial.size() == 2 ? kPdgClusterNN : kPdgClusterNNN) + initialZ;
+        event->AddParticle(cluster, kIStNucleonTarget, event->TargetNucleusPosition(),
+          -1, -1, -1, tempp4, v4);
+        interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(cluster);
+        const int finalZ = std::count(selection.final.begin(), selection.final.end(), proton);
+        interaction->ExclTagPtr()->SetNNucleons(finalZ, selection.final.size()-finalZ);
+        event->SetDiffXSec(x_tot, kPSTlctl);
       }
     }
   }
@@ -1469,144 +1516,221 @@ void MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
   interaction->KinePtr()->SetFSLeptonP4(p4l);
 
   event->AddParticle(pdgc, kIStStableFinalState, momidx, -1, -1, -1, p4l, v4);
+  return selection;
 }
 //___________________________________________________________________________
-void MECGenerator::GenerateValencia2020Hadrons(GHepRecord * event) const
+void MECGenerator::GenerateValencia2020Hadrons(
+  GHepRecord* event, const Valencia2020Selection& selection) const
 {
-  this->GenerateNSVInitialHadrons(event);
-}
-//___________________________________________________________________________
-void MECGenerator::DecayValencia2020NucleonCluster(GHepRecord * event) const
-{
-  LOG("MEC", pINFO) << "Decaying Valencia 2020 nucleon cluster...";
+  using namespace utils::valencia2020;
+  Interaction* interaction = event->Summary();
+  GHepParticle* target_particle = event->TargetNucleus();
+  Target target(target_particle->Pdg());
+  const auto vXSec = dynamic_cast<const Valencia2020MECPXSec*>(fXSecModel);
+  const bool nuwro = vXSec && vXSec->NuWroCompatible();
+  const NuWroDensity* density = nuwro ? &NuWroDensityFor(target.Z(),target.N()) : nullptr;
+  if (!nuwro && fNuclModel->ModelType(target) != kNucmLocalFermiGas)
+    throw std::runtime_error("Valencia2020 paper hadronizer requires LocalFGM");
 
-  int nucleon_cluster_id = 5;
-  GHepParticle * nucleon_cluster = event->Particle(nucleon_cluster_id);
-  assert(nucleon_cluster);
+  TLorentzVector vertex = *event->Probe()->X4();
+  double radius = vertex.Vect().Mag(); // GENIE intranuclear coordinates: fm
+  const TLorentzVector q = *event->Probe()->P4() - *event->FinalStatePrimaryLepton()->P4();
+  const TLorentzVector target_p4 = *target_particle->P4();
+  const int count = selection.final.size();
+  const int initialZ = std::count(selection.initial.begin(), selection.initial.end(), kPdgProton);
+  const int finalZ = std::count(selection.final.begin(), selection.final.end(), kPdgProton);
+  const int remnant_pdg = pdg::IonPdgCode(target.A()-count, target.Z()-initialZ);
+  if (!PDGLibrary::Instance()->Find(remnant_pdg, false))
+    throw std::runtime_error("Valencia2020: residual nucleus missing from PDG catalogue");
 
-  int cluster_pdg = nucleon_cluster->Pdg();
-  int pdg_prim = 0;
-  int pdg_spec = 0;
-  RandomGen * rnd = RandomGen::Instance();
+  double masses[3] = {}, kf[3] = {}, ef[3] = {};
+  double threshold = 0.;
+  for (int i = 0; i < count; ++i) {
+    masses[i] = PDGLibrary::Instance()->Find(selection.final[i])->Mass();
+    threshold += masses[i];
+  }
 
-  if (cluster_pdg == kPdgClusterPP) {
-    pdg_prim = kPdgProton;
-    pdg_spec = kPdgProton;
-  } else if (cluster_pdg == kPdgClusterNN) {
-    pdg_prim = kPdgNeutron;
-    pdg_spec = kPdgNeutron;
-  } else if (cluster_pdg == kPdgClusterNP) {
-    Interaction * interaction = event->Summary();
-    int nu_pdg = interaction->InitState().ProbePdg();
-    bool is_nu = (nu_pdg > 0);
-    double r_chan = rnd->RndHadro().Rndm();
-
-    if (is_nu) {
-      // In nu_mu CC on nn pair: direct diagram has proton as primary struck nucleon
-      if (r_chan < 0.65) {
-        pdg_prim = kPdgProton;
-        pdg_spec = kPdgNeutron;
-      } else {
-        pdg_prim = kPdgNeutron;
-        pdg_spec = kPdgProton;
-      }
-    } else {
-      if (r_chan < 0.65) {
-        pdg_prim = kPdgNeutron;
-        pdg_spec = kPdgProton;
-      } else {
-        pdg_prim = kPdgProton;
-        pdg_spec = kPdgNeutron;
+  RandomGen* random = RandomGen::Instance();
+  TRandom& rng = random->RndHadro();
+  // Native 3p3h inherits PB from an independent 2p2h lepton proposal. A
+  // positive two-body response clears that flag after a successful hadronic
+  // trial. Reproduce its marginal distribution explicitly, without global
+  // mutable state or changing this event's accepted lepton/channel. The very
+  // small native finite-hadronic-retry failure probability is not ported.
+  bool nuwro_three_pauli = false;
+  if (nuwro && count == 3) {
+    nuwro_three_pauli = true;
+    Interaction auxiliary(*interaction);
+    const double E=interaction->InitState().ProbeE(kRfLab);
+    const double ml=interaction->FSPrimLepton()->Mass();
+    const double width=E-ml-vXSec->EnergyShift(interaction);
+    if (width > 0.) {
+      const double T=width*rng.Rndm(), p=std::sqrt(T*(T+2.*ml));
+      const double cmin=p>0. ? std::max(-1.,(E*E+p*p-1.44)/(2.*E*p)) : 2.;
+      if (cmin < 1.) {
+        auxiliary.KinePtr()->SetKV(kKVTl,T);
+        auxiliary.KinePtr()->SetKV(kKVctl,cmin+(1.-cmin)*rng.Rndm());
+        double pp,np,pn,three,total;
+        vXSec->GetRawChannelCrossSections(&auxiliary,pp,np,pn,three,total);
+        nuwro_three_pauli = pp+np+pn <= 0.;
       }
     }
-  } else {
-    PDGCodeList pdgv = this->NucleonClusterConstituents(cluster_pdg);
-    pdg_prim = pdgv[0];
-    pdg_spec = pdgv[1];
+  }
+  TLorentzVector initial_p4, system_p4, remnant_p4;
+  std::vector<TLorentzVector> daughters(count);
+  bool accepted = false;
+  // Keep the accepted lepton and channel fixed throughout hadronic retries.
+  // The vertex and initial momenta form one joint proposal, as in NuWro.
+  // A surface vertex can have no kinematically allowed initial configuration;
+  // holding it fixed would exhaust retries even for a valid inclusive point.
+  // The compatible Ar40 antineutrino tail can accept only about 2e-5 of
+  // proposals. Allow more trials without discarding/reselecting the accepted
+  // lepton/channel (which would bias its distribution).
+  const int max_hadronic_trials = nuwro ? 1000000 : 100000;
+  for (int attempt = 0; attempt < max_hadronic_trials && !accepted; ++attempt) {
+    if (nuwro) {
+      vertex.SetVect(density->SampleVertex(rng));
+      radius = vertex.Vect().Mag();
+    } else if (attempt > 0) {
+      vertex.SetVect(fValenciaVertexGenerator->GenerateVertex(interaction, target.A()));
+      radius = vertex.Vect().Mag();
+    }
+    double fermi_threshold = 0.;
+    for (int i = 0; i < count; ++i) {
+      kf[i] = nuwro ? density->FermiMomentum(selection.final[i],radius) :
+        fNuclModel->LocalFermiMomentum(target, selection.final[i], radius);
+      ef[i] = std::sqrt(masses[i]*masses[i] + kf[i]*kf[i]);
+      fermi_threshold += ef[i];
+    }
+    double common_kf=0., common_kinetic_fermi=0.;
+    if (nuwro) {
+      const int species=count==2 ? selection.initial[0] :
+        (rng.Rndm() < double(target.Z())/target.A() ? kPdgProton:kPdgNeutron);
+      common_kf=density->FermiMomentum(species,radius);
+      const double average_mass=.5*(PDGLibrary::Instance()->Find(kPdgProton)->Mass()
+                                  +PDGLibrary::Instance()->Find(kPdgNeutron)->Mass());
+      common_kinetic_fermi=std::sqrt(average_mass*average_mass+common_kf*common_kf)-average_mass;
+      // Only the backward daughter has the native two-body kinetic cut.
+      // Three-body blocking is applied in the CM, below.
+      fermi_threshold=threshold;
+    }
+    initial_p4.SetPxPyPzE(0.,0.,0.,0.);
+    std::vector<TVector3> momenta(count);
+    for (int i=0; i<count; ++i) {
+      const int pdgc=selection.initial[i];
+      target.SetHitNucPdg(pdgc);
+      if (nuwro) momenta[i]=NuWroFermiSphere(rng,count==3 ? common_kf : density->FermiMomentum(pdgc,radius));
+      else {
+        fNuclModel->GenerateNucleon(target, radius);
+        momenta[i]=fNuclModel->Momentum3();
+      }
+    }
+    if (nuwro && count==2) {
+      if (momenta[0].Mag() > .246 && momenta[1].Mag() > .246) continue;
+      if (momenta[0].Mag2() < momenta[1].Mag2()) std::swap(momenta[0],momenta[1]);
+    }
+    double initial_kinetic=0.;
+    for (int i=0; i<count; ++i) {
+      const int pdgc=selection.initial[i];
+      const TVector3& momentum=momenta[i];
+      const double mass = PDGLibrary::Instance()->Find(pdgc)->Mass();
+      const double energy=std::sqrt(mass*mass+momentum.Mag2());
+      initial_kinetic+=energy-mass;
+      initial_p4 += TLorentzVector(momentum,energy);
+    }
+    // Native excess-energy cap (kaskada_w=7 MeV). Assign removed energy to
+    // the remnant through the effective initial cluster, preserving closure.
+    if (nuwro && count==2)
+      initial_p4.SetE(initial_p4.E()-std::max(0.,initial_kinetic-2.*common_kinetic_fermi-.007));
+    // Sect. III.2: independent on-shell initial nucleons, without the legacy
+    // fixed-mass pair or a second removal-energy subtraction.
+    system_p4 = initial_p4 + q;
+    remnant_p4 = target_p4 - initial_p4;
+    if (system_p4.E() <= fermi_threshold || system_p4.M2() <= threshold*threshold ||
+        remnant_p4.E() <= 0. || remnant_p4.M2() <= 0.) continue;
+    const double W = system_p4.M();
+    const TVector3 boost = system_p4.BoostVector();
+
+    if (count == 2) {
+      const double e1 = (W*W + masses[0]*masses[0] - masses[1]*masses[1])/(2.*W);
+      const double e2 = W-e1;
+      const double pstar = std::sqrt(std::max(0., e1*e1-masses[0]*masses[0]));
+      double lower, upper;
+      if (nuwro) {
+        lower=0.; upper=1.;
+        const double gamma=1./std::sqrt(1.-boost.Mag2());
+        const double denom=gamma*boost.Mag()*pstar;
+        if (gamma*e2 <= masses[1]+common_kinetic_fermi) continue;
+        if (denom > 1.e-14) upper=std::min(1.,(gamma*e2-masses[1]-common_kinetic_fermi)/denom);
+      } else if (!PauliAngularRange(boost.Mag(), pstar, e1, e2, ef[0], ef[1], lower, upper)) continue;
+      const int angular_channel=nuwro ? NuWroAngularChannel(selection.channel,interaction->InitState().ProbePdg()<0) : selection.channel;
+      const double c = SampleForwardCosine(rng, fValenciaP[angular_channel],
+        fValenciaL[angular_channel], lower, upper);
+      const double phi = 2.*kPi*rng.Rndm();
+      const double sine = std::sqrt(std::max(0., 1.-c*c));
+      TVector3 direction(sine*std::cos(phi), sine*std::sin(phi), c);
+      // In the zero-boost limit all lab energies are angle independent.
+      TVector3 axis = boost.Mag2() > 1.e-28 ? boost.Unit() : q.Vect().Unit();
+      if (axis.Mag2() == 0.) axis.SetXYZ(0.,0.,1.);
+      direction.RotateUz(axis);
+      daughters[0] = TLorentzVector(pstar*direction, e1);
+      daughters[1] = TLorentzVector(-pstar*direction, e2);
+      daughters[0].Boost(boost);
+      daughters[1].Boost(boost);
+      accepted = nuwro ? daughters[1].E() > masses[1]+common_kinetic_fermi :
+        daughters[0].E() > ef[0] && daughters[1].E() > ef[1];
+    } else {
+      if (!fPhaseSpaceGenerator.SetDecay(system_p4, count, masses)) continue;
+      // ROOT's default (non-Fermi) Raubold-Lynch weight is normalised by a
+      // rigorous product-of-maxima bound: Generate() returns a weight <= 1.
+      // Unweight first, then condition on all three lab Pauli thresholds.
+      int pauli_trials=0;
+      for (int decay = 0; decay < 10000 && !accepted; ++decay) {
+        const double weight = fPhaseSpaceGenerator.Generate();
+        if (!(weight >= 0.) || weight > 1.+1.e-12)
+          throw std::runtime_error("Valencia2020: invalid three-body phase-space weight");
+        if (rng.Rndm() >= weight) continue;
+        ++pauli_trials;
+        accepted = true;
+        for (int i = 0; i < count; ++i) {
+          daughters[i] = *fPhaseSpaceGenerator.GetDecay(i);
+          if (nuwro) {
+            // Match native CM trials, including retaining the last decay
+            // after mec_pb_trials=30. All daughters remain on shell here.
+            if (nuwro_three_pauli && pauli_trials < 30) {
+              TLorentzVector cm=daughters[i]; cm.Boost(-boost);
+              if (cm.P() < common_kf) accepted=false;
+            }
+          } else if (daughters[i].E() <= ef[i]) accepted = false;
+        }
+      }
+    }
+  }
+  if (!accepted) {
+    event->EventFlags()->SetBitNumber(kHadroSysGenErr, true);
+    std::cerr << "Valencia2020 exhaustion: channel=" << selection.channel
+      << " radius=" << radius << " q0=" << q.E() << " q3=" << q.P()
+      << " kf0=" << kf[0] << " kf1=" << kf[1] << " kf2=" << kf[2]
+      << " last_initial=" << initial_p4.E() << "," << initial_p4.P()
+      << " last_system=" << system_p4.E() << "," << system_p4.P() << std::endl;
+    throw std::runtime_error("Valencia2020: exhausted hadronic trials at fixed lepton/channel");
   }
 
-  TLorentzVector * p4d = nucleon_cluster->GetP4();
-  TLorentzVector * v4d = nucleon_cluster->GetX4();
-  double W = p4d->M();
-
-  double m_prim = PDGLibrary::Instance()->Find(pdg_prim)->Mass();
-  double m_spec = PDGLibrary::Instance()->Find(pdg_spec)->Mass();
-  double sum_mass = m_prim + m_spec;
-
-  if (W <= sum_mass) {
-    LOG("MEC", pWARN) << "Valencia2020: Cluster mass W = " << W << " <= threshold " << sum_mass;
-    this->DecayNucleonCluster(event);
-    delete p4d;
-    delete v4d;
-    return;
-  }
-
-  double E_cm = W;
-  double pstar2 = (E_cm*E_cm - sum_mass*sum_mass) * (E_cm*E_cm - (m_prim - m_spec)*(m_prim - m_spec)) / (4.0 * E_cm * E_cm);
-  double pstar = (pstar2 > 0.) ? TMath::Sqrt(pstar2) : 0.0;
-  double E_prim_cm = TMath::Sqrt(pstar*pstar + m_prim*m_prim);
-  double E_spec_cm = TMath::Sqrt(pstar*pstar + m_spec*m_spec);
-
-  TVector3 beta = p4d->BoostVector();
-
-  // Generate spectator trial momentum in Lab using target Fermi motion
-  TVector3 p_fermi(0, 0, 0);
-  GHepParticle * tgt_nuc = event->TargetNucleus();
-  if (tgt_nuc && fNuclModel) {
-    Target tgt(tgt_nuc->Pdg());
-    tgt.SetHitNucPdg(pdg_spec);
-    fNuclModel->GenerateNucleon(tgt);
-    p_fermi = fNuclModel->Momentum3();
-  } else {
-    double kF = 0.221;
-    double p_mag = kF * std::cbrt(rnd->RndHadro().Rndm());
-    double costh = -1.0 + 2.0 * rnd->RndHadro().Rndm();
-    double phi = 2.0 * kPi * rnd->RndHadro().Rndm();
-    p_fermi.SetXYZ(p_mag * TMath::Sqrt(std::max(0., 1. - costh*costh)) * TMath::Cos(phi),
-                   p_mag * TMath::Sqrt(std::max(0., 1. - costh*costh)) * TMath::Sin(phi),
-                   p_mag * costh);
-  }
-
-  // Soft virtual pion exchange momentum kick along momentum transfer q
-  GHepParticle * neutrino = event->Probe();
-  GHepParticle * lepton = event->FinalStatePrimaryLepton();
-  TVector3 q_dir(0, 0, 1);
-  if (neutrino && lepton) {
-    q_dir = (neutrino->P4()->Vect() - lepton->P4()->Vect()).Unit();
-  }
-
-  double delta_mag = rnd->RndHadro().Exp(0.080); // ~80 MeV/c kick
-  double delta_costh = 0.5 + 0.5 * rnd->RndHadro().Rndm();
-  double delta_phi = 2.0 * kPi * rnd->RndHadro().Rndm();
-  TVector3 delta_vec(delta_mag * TMath::Sqrt(std::max(0., 1. - delta_costh*delta_costh)) * TMath::Cos(delta_phi),
-                     delta_mag * TMath::Sqrt(std::max(0., 1. - delta_costh*delta_costh)) * TMath::Sin(delta_phi),
-                     delta_mag * delta_costh);
-  delta_vec.RotateUz(q_dir);
-
-  TVector3 p_spec_trial = p_fermi + delta_vec;
-  double E_spec_trial = TMath::Sqrt(m_spec*m_spec + p_spec_trial.Mag2());
-  TLorentzVector p4_spec_trial(p_spec_trial, E_spec_trial);
-
-  // Boost trial spectator into cluster CM frame
-  p4_spec_trial.Boost(-beta);
-  TVector3 n_spec_cm = (p4_spec_trial.Vect().Mag() > 0.) ? p4_spec_trial.Vect().Unit() : TVector3(0, 0, -1);
-
-  // On-shell CM 4-momenta
-  TLorentzVector p4_spec_cm(pstar * n_spec_cm, E_spec_cm);
-  TLorentzVector p4_prim_cm(-pstar * n_spec_cm, E_prim_cm);
-
-  // Boost back to Lab frame
-  p4_spec_cm.Boost(beta);
-  p4_prim_cm.Boost(beta);
-
-  // Insert hadrons into event record
-  TLorentzVector v4(*v4d);
-  GHepStatus_t ist = kIStHadronInTheNucleus;
-  event->AddParticle(pdg_prim, ist, nucleon_cluster_id, -1, -1, -1, p4_prim_cm, v4);
-  event->AddParticle(pdg_spec, ist, nucleon_cluster_id, -1, -1, -1, p4_spec_cm, v4);
-
-  delete p4d;
-  delete v4d;
+  event->HitNucleon()->SetMomentum(initial_p4);
+  event->Probe()->SetPosition(vertex);
+  event->FinalStatePrimaryLepton()->SetPosition(vertex);
+  event->HitNucleon()->SetPosition(vertex);
+  interaction->InitStatePtr()->TgtPtr()->SetHitNucP4(initial_p4);
+  event->AddParticle(remnant_pdg, kIStStableFinalState, event->TargetNucleusPosition(),
+    -1, -1, -1, remnant_p4, vertex);
+  const int recoil_pdg = (count == 2 ? kPdgClusterNN : kPdgClusterNNN) + finalZ;
+  event->AddParticle(recoil_pdg, kIStDecayedState, event->HitNucleonPosition(),
+    -1, -1, -1, system_p4, vertex);
+  const int recoil_position = event->ParticlePosition(recoil_pdg, kIStDecayedState);
+  for (int i = 0; i < count; ++i)
+    event->AddParticle(selection.final[i], kIStHadronInTheNucleus, recoil_position,
+      -1, -1, -1, daughters[i], vertex);
+  interaction->KinePtr()->SetHadSystP4(system_p4);
 }
 //___________________________________________________________________________
 void MECGenerator::Configure(const Registry & config)
@@ -1623,10 +1747,24 @@ void MECGenerator::Configure(string config)
 //___________________________________________________________________________
 void MECGenerator::LoadConfig(void)
 {
+    fValenciaMaxima.clear();
+    const char* channels[] = {"pp", "np", "pn"};
+    const double defaultP[] = {0.77, 0.70, 0.80};
+    const int defaultL[] = {4, 3, 4};
+    for (int i = 0; i < 3; ++i) {
+      GetParamDef(std::string("Valencia2020-")+channels[i]+"-P", fValenciaP[i], defaultP[i]);
+      GetParamDef(std::string("Valencia2020-")+channels[i]+"-l", fValenciaL[i], defaultL[i]);
+      if (!std::isfinite(fValenciaP[i]) || std::abs(fValenciaP[i]) > 1. ||
+          fValenciaL[i] < 1 || fValenciaL[i] > 10)
+        throw std::invalid_argument("Valencia2020: require P in [-1,1], l in [1,10]");
+    }
     fNuclModel = 0;
     RgKey nuclkey = "NuclearModel";
     fNuclModel = dynamic_cast<const NuclearModelI *> (this->SubAlg(nuclkey));
     assert(fNuclModel);
+    fValenciaVertexGenerator = dynamic_cast<const VertexGenerator *>(
+      this->SubAlg("Valencia2020-VertexGenerator"));
+    assert(fValenciaVertexGenerator);
 
     GetParamDef( "MaxXSec-SafetyFactor", fSafetyFactor, 1.6 ) ;
     GetParam( "MaxXSec-FunctionCalls", fFunctionCalls ) ;

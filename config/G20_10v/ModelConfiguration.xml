@@ -131,7 +131,10 @@ University of Liverpool
   <param type="alg" name="XSecModel@genie::EventGenerator/DFR-NC">         genie::ReinDFRPXSec/Default           </param>
 
   <!-- <param type="alg" name="XSecModel@genie::EventGenerator/MEC-CC">         genie::NievesSimoVacasMECPXSec2016/Default </param> -->
-  <param type="alg" name="XSecModel@genie::EventGenerator/MEC-CC">         genie::Valencia2020MECPXSec/Default </param>
+  <!-- NuWro-compatible pre-FSI prescriptions with conserving GENIE kinematics.
+       Select Valencia2020MECPXSec/Default explicitly for the previous prescription.
+       Use matching NuWroCompatible splines for event generation. -->
+  <param type="alg" name="XSecModel@genie::EventGenerator/MEC-CC">         genie::Valencia2020MECPXSec/NuWroCompatible </param>
 
   <param type="alg" name="XSecModel@genie::EventGenerator/MEC-NC">         genie::EmpiricalMECPXSec2015/Default  </param>
   <param type="alg" name="XSecModel@genie::EventGenerator/MEC-EM">         genie::EmpiricalMECPXSec2015/Default  </param>

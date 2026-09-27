@@ -363,7 +363,12 @@ int genie::pdg::SwitchProtonNeutron(int pdgc)
 //____________________________________________________________________________
 int genie::pdg::ModifyNucleonCluster(int pdgc, int dQ)
 {
-  assert(pdg::Is2NucleonCluster(pdgc));
+  assert(pdg::IsNucleonCluster(pdgc));
+
+  if (pdg::Is3NucleonCluster(pdgc)) {
+    const int charge = pdg::NucleonClusterCharge(pdgc) + dQ;
+    return (charge >= 0 && charge <= 3) ? kPdgClusterNNN + charge : 0;
+  }
 
   if(pdgc == kPdgClusterNN) {
     if      (dQ ==  0) { return kPdgClusterNN; }
@@ -406,6 +411,25 @@ bool genie::pdg::Is2NucleonCluster(int pdgc)
       pdgc == kPdgClusterNP   ||
       pdgc == kPdgClusterPP
    );
+}
+//____________________________________________________________________________
+bool genie::pdg::Is3NucleonCluster(int pdgc)
+{
+  return pdgc >= kPdgClusterNNN && pdgc <= kPdgClusterPPP;
+}
+bool genie::pdg::IsNucleonCluster(int pdgc)
+{
+  return Is2NucleonCluster(pdgc) || Is3NucleonCluster(pdgc);
+}
+int genie::pdg::NucleonClusterSize(int pdgc)
+{
+  return Is2NucleonCluster(pdgc) ? 2 : (Is3NucleonCluster(pdgc) ? 3 : 0);
+}
+int genie::pdg::NucleonClusterCharge(int pdgc)
+{
+  if (Is2NucleonCluster(pdgc)) return pdgc - kPdgClusterNN;
+  if (Is3NucleonCluster(pdgc)) return pdgc - kPdgClusterNNN;
+  return -1;
 }
 //____________________________________________________________________________
 bool genie::pdg::IsDarkSectorParticle(int pdgc)

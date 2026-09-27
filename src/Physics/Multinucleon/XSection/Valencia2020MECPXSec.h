@@ -19,6 +19,7 @@
 #include "Physics/HadronTensors/HadronTensorModelI.h"
 #include "Physics/Common/XSecScaleI.h"
 #include "Physics/Common/QvalueShifter.h"
+#include "Physics/Multinucleon/XSection/Valencia2020ChannelWeights.h"
 
 namespace genie {
 
@@ -36,7 +37,16 @@ public:
   double Integral     (const Interaction * i) const;
   bool   ValidProcess (const Interaction * i) const;
 
-  // Channel-decomposed cross section calculation
+  // Tensor energy shift in GeV, including an optional QvalueShifterAlg.
+  // TargetQValue (default) or the installed NuWro Valencia2020 prescription.
+  double EnergyShift(const Interaction * i) const;
+
+  // One setting controls the contraction, exclusive weights and hadronizer.
+  bool NuWroCompatible() const { return fPreFSIPrescription == "NuWro"; }
+
+  // Nonnegative effective channel cross sections, GeV^-3, including scales.
+  // Default rescales positive partials; NuWro uses conditional channel draws.
+  // Their sum plus the nonnegative 3p3h rate equals the inclusive cross section.
   void GetChannelCrossSections(
     const Interaction * i,
     double & xsec_pp,
@@ -44,6 +54,12 @@ public:
     double & xsec_pn,
     double & xsec_3p3h,
     double & xsec_tot) const;
+
+  // Signed contractions for diagnostics; NOT probabilities. Total is the raw
+  // signed sum, before the positivity constraint on each multiplicity sector.
+  void GetRawChannelCrossSections(
+    const Interaction * i, double & pp, double & np, double & pn,
+    double & three, double & total) const;
 
   // Override Algorithm::Configure
   void Configure (const Registry & config);
@@ -56,6 +72,8 @@ private:
   double fXSecCCScale;
   double fXSecNCScale;
   bool   fInclude3p3h;
+  string fEnergyShiftPrescription;
+  string fPreFSIPrescription;
 
   const HadronTensorModelI * fHadronTensorModel;
   const XSecIntegratorI *    fXSecIntegrator;

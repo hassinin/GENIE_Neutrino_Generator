@@ -13,9 +13,30 @@
     <param type="double" name="MEC-NC-XSecScale"> 1.000 </param>
     <param type="bool"   name="Include3p3h">      true  </param>
 
+    <!-- TargetQValue: actual target nuclear mass difference (GENIE default).
+         NuWro: exact Z-selected E_corr constants of installed mec_kind=6.
+         QvalueShifterAlg, if supplied, applies to either base prescription.
+         Regenerate splines whenever this setting changes. -->
+    <param type="string" name="EnergyShiftPrescription"> TargetQValue </param>
+    <param type="string" name="PreFSIPrescription"> GENIE </param>
+
     <param type="alg" name="HadronTensorAlg">        genie::Valencia2020HadronTensorModel/Default </param>
     <param type="alg" name="NumericalIntegrationAlg"> genie::MECXSec/Default                      </param>
 
+  </param_set>
+
+  <!-- Other parameters inherit Default. This changes only the energy shift. -->
+  <param_set name="NuWroEnergyShift">
+    <param type="string" name="EnergyShiftPrescription"> NuWro </param>
+  </param_set>
+
+  <!-- Installed NuWro mec_kind=6 conventions, with physical GENIE masses
+       and exact event conservation. Select this SAME configuration for
+       spline production and event generation. The MEC hadronizer reads it
+       from the cross-section algorithm; no separate switch is needed. -->
+  <param_set name="NuWroCompatible">
+    <param type="string" name="EnergyShiftPrescription"> NuWro </param>
+    <param type="string" name="PreFSIPrescription"> NuWro </param>
   </param_set>
 
 </alg_conf>

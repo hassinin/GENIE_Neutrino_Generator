@@ -199,10 +199,10 @@ int Interaction::RecoilNucleonPdg(void) const
   }
 
   if (fProcInfo->IsMEC()) {
-    bool struck_is_2nuc_cluster = pdg::Is2NucleonCluster(struck_nuc);
+    bool struck_is_nuc_cluster = pdg::IsNucleonCluster(struck_nuc);
     bool is_weak = fProcInfo->IsWeak();
     bool is_em   = fProcInfo->IsEM();
-    assert(struck_is_2nuc_cluster && (is_weak || is_em));
+    assert(struck_is_nuc_cluster && (is_weak || is_em));
     if(fProcInfo->IsWeakCC()) {
        bool isnu = pdg::IsNeutrino(fInitialState->ProbePdg());
        // nucleon cluster charge should be incremented by +1 for

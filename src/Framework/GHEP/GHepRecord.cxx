@@ -432,7 +432,7 @@ int GHepRecord::HitNucleonPosition(void) const
   if(!p) return -1;
 
 //  bool isN = pdg::IsNeutronOrProton(p->Pdg());
-  bool isN = pdg::IsNucleon(p->Pdg()) || pdg::Is2NucleonCluster(p->Pdg());
+  bool isN = pdg::IsNucleon(p->Pdg()) || pdg::IsNucleonCluster(p->Pdg());
   if(isN && p->Status()==ist) return ipos;
 
   return -1;

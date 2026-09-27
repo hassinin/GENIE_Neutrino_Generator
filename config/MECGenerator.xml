@@ -23,6 +23,15 @@ MaxXSec-MinScanPointsCosth int      No         Number of scan points for Costh r
     <param type="string" name="CommonParam"> MultiNucleons </param>
     
     <param type="alg" name="NuclearModel"> genie::NuclearModelMap/Default </param>
+    <param type="alg" name="Valencia2020-VertexGenerator"> genie::VertexGenerator/Default </param>
+
+    <!-- arXiv:2411.11523 global angular fits; only used by Valencia2020. -->
+    <param type="double" name="Valencia2020-pp-P"> 0.77 </param>
+    <param type="int" name="Valencia2020-pp-l"> 4 </param>
+    <param type="double" name="Valencia2020-np-P"> 0.70 </param>
+    <param type="int" name="Valencia2020-np-l"> 3 </param>
+    <param type="double" name="Valencia2020-pn-P"> 0.80 </param>
+    <param type="int" name="Valencia2020-pn-l"> 4 </param>
 
     <!-- <param type="double" name="SuSA-MaxXSec-DiffTolerance"> 0.0 </param> -->
     
@@ -35,4 +44,3 @@ MaxXSec-MinScanPointsCosth int      No         Number of scan points for Costh r
   </param_set>
   
 </alg_conf>
-

@@ -41,6 +41,18 @@ PDGLibrary::PDGLibrary()
 {
   if( ! LoadDBase() ) LOG("PDG", pERROR) << "Could not load PDG data";
 
+  // Register even when an external PDG catalogue is selected, so ROOT event
+  // readback and FSI can resolve the new charge-specific MEC clusters.
+  const double mp = fDatabasePDG->GetParticle(kPdgProton)->Mass();
+  const double mn = fDatabasePDG->GetParticle(kPdgNeutron)->Mass();
+  const char* names[] = {"NNN_cluster", "NNP_cluster", "NPP_cluster", "PPP_cluster"};
+  for (int z = 0; z <= 3; ++z) {
+    if (!fDatabasePDG->GetParticle(kPdgClusterNNN + z)) {
+      fDatabasePDG->AddParticle(names[z], names[z], z*mp + (3-z)*mn,
+        true, 0., 3.*z, "NucleonCluster", kPdgClusterNNN + z);
+    }
+  }
+
 #ifdef __GENIE_DARK_NEUTRINO_ENABLED__
   LOG("PDG", pINFO) << "Loading Dark sector Info";
   if ( ! AddDarkSector() ) { 

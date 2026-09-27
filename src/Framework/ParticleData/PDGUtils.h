@@ -88,6 +88,10 @@ namespace pdg
   bool IsHadron           (int pdgc);
   bool IsBaryonResonance  (int pdgc);
   bool Is2NucleonCluster  (int pdgc);
+  bool Is3NucleonCluster  (int pdgc);
+  bool IsNucleonCluster   (int pdgc);
+  int  NucleonClusterSize (int pdgc);
+  int  NucleonClusterCharge (int pdgc);
 
   bool IsDarkSectorParticle   (int pdgc);
   bool IsHNL              (int pdgc);
