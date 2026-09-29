@@ -110,6 +110,7 @@
 #include "Framework/Utils/PrintUtils.h"
 #include "Framework/Utils/XSecSplineList.h"
 #include "Framework/Utils/CmdLnArgParser.h"
+#include "gpu_spline/gpu_hadron_tensor.h"
 
 #ifdef __GENIE_GEOM_DRIVERS_ENABLED__
 #include "Tools/Geometry/ROOTGeomAnalyzer.h"
@@ -140,6 +141,8 @@ bool     gOptNoCopy         = false;
 long int gOptRanSeed        = -1;   // random number seed
 string   gOptInpXSecFile    = "";   // input cross-section file
 string   gOptOutXSecFile    = "";   // output cross-section file
+bool     gOptUseGpu         = false; // use GPU acceleration
+int      gOptGpuDeviceId    = 0;     // GPU device ID
 
 //____________________________________________________________________________
 int main(int argc, char ** argv)
@@ -329,6 +332,17 @@ void GetCommandLineArgs(int argc, char ** argv)
     gOptInpXSecFile = "";
   }
 
+  // GPU acceleration option
+  if( parser.OptionExists("use-gpu") ) {
+    gOptUseGpu = true;
+    if( parser.OptionExists("gpu-device") ) {
+      gOptGpuDeviceId = parser.ArgAsInt("gpu-device");
+    }
+    gpuspline::GpuHadronTensor::SetDefaultDevice(gOptGpuDeviceId);
+    gpuspline::GpuHadronTensor::SetGpuEnabled(true);
+    setenv("GENIE_USE_GPU", "1", 1);
+  }
+
   //
   // print the command-line options
   //
@@ -341,7 +355,12 @@ void GetCommandLineArgs(int argc, char ** argv)
      << "\n Output cross-section file : " << gOptOutXSecFile
      << "\n Input cross-section file : " << gOptInpXSecFile
      << "\n Random number seed : " << gOptRanSeed
-     << "\n";
+     << "\n Use GPU acceleration (Hadron Tensors)? : " << (gOptUseGpu ? "YES" : "NO");
+  if(gOptUseGpu) {
+    LOG("gmkspl", pNOTICE)
+     << "\n GPU device ID : " << gOptGpuDeviceId;
+  }
+  LOG("gmkspl", pNOTICE) << "\n";
 
   LOG("gmkspl", pNOTICE) << *RunOpt::Instance();
 }
@@ -358,6 +377,8 @@ void PrintSyntax(void)
     << "\n    [--no-copy]"
     << "\n    [--seed seed_number]"
     << "\n    [--input-cross-sections xml_file]"
+    << "\n    [--use-gpu]"
+    << "\n    [--gpu-device id]"
     << RunOpt::RunOptSyntaxString(false)
     << "\n";
 

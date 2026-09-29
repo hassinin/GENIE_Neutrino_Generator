@@ -77,11 +77,18 @@ bool SpectralFunc::GenerateNucleon(const Target & target) const
 
   RandomGen * rnd = RandomGen::Instance();
 
+  // Full joint (p,E) tables have narrow peaks in a large sampling rectangle.
+  // The generic 1000-attempt cap can reject an otherwise valid draw. Allow
+  // more proposals with the same envelope and density, without truncating
+  // the high-momentum/removal-energy tail or reusing a previous sample.
+  const unsigned int max_iterations = 100 * kRjMaxIterations;
   unsigned int niter = 0;
   while(1) {
-    if(niter > kRjMaxIterations) {
+    if(niter >= max_iterations) {
        LOG("SpectralFunc", pWARN) 
            << "Couldn't generate a hit nucleon after " << niter << " iterations";
+       fCurrRemovalEnergy = 0.;
+       fCurrMomentum.SetXYZ(0.,0.,0.);
        return false;
     }
     niter++;

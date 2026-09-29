@@ -13,6 +13,8 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <memory>
+#include <algorithm>
 
 #include <TMath.h>
 
@@ -35,6 +37,49 @@
 using namespace genie;
 using namespace genie::utils;
 using namespace genie::constants;
+
+namespace {
+// A spacelike (or lightlike) bound nucleon has no rest frame. Its combined
+// system with a neutrino can nevertheless have physical two-body final states.
+// Keep the established timelike calculation unchanged; use invariants for
+// weak QE samples for which a struck-nucleon rest-frame boost is undefined.
+bool NeedsInvariantQELLimits(const Interaction& in)
+{
+  return in.ProcInfo().IsQuasiElastic() && in.ProcInfo().IsWeak()
+    && in.InitState().Tgt().HitNucP4().M2() <= 0.;
+}
+
+Range1D_t InvariantQELLimits(const Interaction& in)
+{
+  const Range1D_t empty(-1., -1.);
+  std::unique_ptr<TLorentzVector> k(in.InitState().GetProbeP4(kRfLab));
+  const TLorentzVector total = *k + in.InitState().Tgt().HitNucP4();
+  const double s = total.M2();
+  double W = in.RecoilNucleon()->Mass();
+  const XclsTag& tag = in.ExclTag();
+  if (tag.IsCharmEvent())
+    W = PDGLibrary::Instance()->Find(tag.CharmHadronPdg())->Mass();
+  else if (tag.IsStrangeEvent())
+    W = PDGLibrary::Instance()->Find(tag.StrangeHadronPdg())->Mass();
+  const double ml = in.FSPrimLepton()->Mass();
+  if (!(total.E() > 0.) || !std::isfinite(s) || !(s > (W+ml)*(W+ml)))
+    return empty;
+
+  const double root_s = std::sqrt(s);
+  const double incoming = k->Dot(total) / root_s;
+  const double outgoing = (s + ml*ml - W*W) / (2.*root_s);
+  const double momentum2 = (outgoing-ml)*(outgoing+ml);
+  if (!(incoming > 0.) || !(momentum2 > 0.)) return empty;
+  // Q2 = 2 E_nu* E_l* - ml^2 - 2 E_nu* |p_l*| cos(theta*).
+  // The incoming neutrino is massless, as in InelQ2Lim_W.
+  const double center = 2.*incoming*outgoing - ml*ml;
+  const double width = 2.*incoming*std::sqrt(momentum2);
+  const double low = std::max(controls::kMinQ2Limit, center-width);
+  const double high = std::max(0., center+width);
+  if (!std::isfinite(low) || !std::isfinite(high) || high < low) return empty;
+  return Range1D_t(low, high);
+}
+}
 
 ClassImp(KPhaseSpace)
 
@@ -267,6 +312,11 @@ double KPhaseSpace::Maximum(KineVar_t kvar) const
 //___________________________________________________________________________
 bool KPhaseSpace::IsAboveThreshold(void) const
 {
+  if (NeedsInvariantQELLimits(*fInteraction)) {
+    const Range1D_t limits = InvariantQELLimits(*fInteraction);
+    return limits.max > limits.min;
+  }
+
   double E    = 0.;
   double Ethr = this->Threshold();
 
@@ -494,6 +544,9 @@ Range1D_t KPhaseSpace::WLim(void) const
 //____________________________________________________________________________
 Range1D_t KPhaseSpace::Q2Lim_W(void) const
 {
+  if (NeedsInvariantQELLimits(*fInteraction))
+    return InvariantQELLimits(*fInteraction);
+
   // Computes momentum transfer (Q2>0) limits @ the input invariant mass
   // The calculation proceeds as in kinematics::InelQ2Lim_W().
   // For QEL, W is set to the recoil nucleon mass
@@ -555,6 +608,9 @@ Range1D_t KPhaseSpace::q2Lim_W(void) const
 //____________________________________________________________________________
 Range1D_t KPhaseSpace::Q2Lim(void) const
 {
+  if (NeedsInvariantQELLimits(*fInteraction))
+    return InvariantQELLimits(*fInteraction);
+
   // Computes momentum transfer (Q2>0) limits irrespective of the invariant mass
   // For QEL this is identical to Q2Lim_W (since W is fixed)
   // For RES & DIS, the calculation proceeds as in kinematics::InelQ2Lim().

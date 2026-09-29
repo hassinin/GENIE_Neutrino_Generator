@@ -542,6 +542,9 @@ void Spline::FindClosestKnot(
   if(!pos && !neg) return;
 
   int iknot = fInterpolator->FindX(x);
+  // FindX returns the final knot at/above xmax. Like TSpline3::Eval,
+  // use the last interval so the right-neighbor read stays in bounds.
+  if(iknot >= fNKnots-1 && fNKnots > 1) iknot = fNKnots-2;
 
   double xp=0, yp=0, xn=0, yn=0;
   fInterpolator->GetKnot(iknot,  xn,yn);

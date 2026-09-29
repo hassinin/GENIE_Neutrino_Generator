@@ -23,6 +23,16 @@ AverageOverNucleons          bool     Yes        whether to do an MC integration
     <param type="int" name = "gsl-max-eval"> 100000 </param>
     <param type="alg" name = "VertexGenAlg"> genie::VertexGenerator/Default </param>
     <param type="int" name = "NumNucleonThrows"> 500 </param>
+    <!-- Effective only when GPU acceleration is enabled. Supported: Llewellyn-Smith CCQE,
+         BBA07 elastic + dipole axial FF. Nuclear sampling remains on CPU.
+         Unconverged angular integrals use the original CPU integrator on
+         the same sampled nucleon. False forces the historical CPU path. -->
+    <param type="bool" name = "UseGPUIntegration"> true </param>
+    <!-- Enabled by default for GPU integration; false opts out. The additional
+         evaluation budget applies per nucleon, after gsl-max-eval. Values
+         at or below zero disable additional work. CPU fallback remains. -->
+    <param type="bool" name = "UseGPUAdaptiveIntegration"> true </param>
+    <param type="int" name = "GPUAdaptiveMaxEval"> 100000 </param>
   </param_set>
 
 

@@ -30,6 +30,12 @@
 #include "Physics/Common/VertexGenerator.h"
 #include "Physics/NuclearState/NuclearModel.h"
 #include "Physics/NuclearState/NuclearModelMap.h"
+#include "Physics/QuasiElastic/XSection/QELGpuUtils.h"
+#include "gpu_spline/gpu_qel_integrator.h"
+#include "gpu_spline/gpu_hadron_tensor.h"
+#include <vector>
+#include <cmath>
+#include <stdexcept>
 
 using namespace genie;
 using namespace genie::constants;
@@ -122,7 +128,12 @@ double NewQELXSec::Integrate(const XSecAlgorithmI* model, const Interaction* in)
   if ( !tgt->IsNucleus() || probeE > E_lab_cutoff ) {
     tgt->SetHitNucPosition(0.);
 
-    if ( tgt->IsNucleus() ) nucl_model->GenerateNucleon(*tgt, 0.);
+    if ( tgt->IsNucleus() ) {
+      if (!nucl_model->GenerateNucleon(*tgt, 0.)) {
+        delete func;
+        throw std::runtime_error("NewQELXSec: nuclear sampling failed");
+      }
+    }
     else {
       nucl_model->SetRemovalEnergy(0.);
       interaction->SetBit( kIAssumeFreeNucleon );
@@ -139,6 +150,19 @@ double NewQELXSec::Integrate(const XSecAlgorithmI* model, const Interaction* in)
   // to allow for using the local Fermi gas model). The MC estimator for the
   // total cross section is simply the mean of ig.Integral() for all of the
   // sampled nucleons.
+  gpu_spline::QelParameters gpu_parameters{};
+  std::string gpu_reason;
+  bool use_gpu = fUseGpuIntegration && gpuspline::GpuHadronTensor::IsGpuEnabled()
+    && fGSLIntgType == "adaptive" && fNumNucleonThrows > 0
+    && utils::PrepareQelGpuParameters(model, *interaction, gpu_parameters, gpu_reason);
+  if (fUseGpuIntegration && gpuspline::GpuHadronTensor::IsGpuEnabled() && !use_gpu) {
+    LOG("NewQELXSec", pNOTICE) << "[GPU CCQE] CPU fallback: "
+      << (gpu_reason.empty() ? "unsupported integration settings" : gpu_reason);
+  }
+  struct NuclearSample { TVector3 momentum; double removal, radius; bool prepared; };
+  std::vector<NuclearSample> nuclear_samples;
+  std::vector<gpu_spline::QelSample> gpu_samples;
+  if (use_gpu) { nuclear_samples.reserve(fNumNucleonThrows); gpu_samples.reserve(fNumNucleonThrows); }
   double xsec_sum = 0.;
   for (int n = 0; n < fNumNucleonThrows; ++n) {
 
@@ -152,13 +176,76 @@ double NewQELXSec::Integrate(const XSecAlgorithmI* model, const Interaction* in)
     // Sample a new nucleon 3-momentum and removal energy (this will be applied
     // to the nucleon via a call to genie::utils::ComputeFullQELPXSec(), so
     // there's no need to mess with its 4-momentum here)
-    nucl_model->GenerateNucleon(*tgt, radius);
+    if (!nucl_model->GenerateNucleon(*tgt, radius)) {
+      delete func;
+      throw std::runtime_error("NewQELXSec: nuclear sampling failed; refusing to reuse a stale sample");
+    }
 
     // The initial state variables have all been defined, so integrate over
     // the final lepton angles.
-    double xsec = ig.Integral(kine_min, kine_max);
+    if (use_gpu) {
+      double binding_energy=0.;
+      utils::BindHitNucleon(*interaction, *nucl_model, binding_energy, bind_mode);
+      gpu_spline::QelSample sample{};
+      bool prepared=utils::PrepareQelGpuSample(model, *interaction, gpu_parameters, sample);
+      nuclear_samples.push_back({nucl_model->Momentum3(),nucl_model->RemovalEnergy(),radius,prepared});
+      gpu_samples.push_back(sample);
+    } else {
+      xsec_sum += ig.Integral(kine_min, kine_max);
+    }
+  }
 
-    xsec_sum += xsec;
+  if (use_gpu) {
+    std::vector<gpu_spline::QelIntegralResult> values;
+    bool ok=gpu_spline::IntegrateQelGpu(gpu_parameters, gpu_samples, fGSLRelTol,
+      fGSLMaxEval, gpuspline::GpuHadronTensor::DefaultDevice(), values, gpu_reason);
+    int adaptive_recovered=0;
+    unsigned long long adaptive_evaluations=0;
+    std::string adaptive_error;
+    if (ok && fUseGpuAdaptiveIntegration) {
+      const auto original=values;
+      if (gpu_spline::RefineQelGpu(gpu_parameters, gpu_samples, fGSLRelTol,
+          fGpuAdaptiveMaxEval, gpuspline::GpuHadronTensor::DefaultDevice(), values, adaptive_error)) {
+        for (size_t n=0;n<values.size();++n) {
+          adaptive_recovered+=!original[n].converged && values[n].converged;
+          adaptive_evaluations+=values[n].evaluations-original[n].evaluations;
+        }
+      }
+      // RefineQelGpu preserves the first-stage results on a device error.
+      // Only still-unconverged samples need the existing CPU fallback.
+    }
+    int cpu_fallbacks=0, gpu_integrals=0, empty_domains=0;
+    for (int n=0;n<fNumNucleonThrows;++n) {
+      if (ok && nuclear_samples[n].prepared && values[n].converged) {
+        xsec_sum+=values[n].value;
+        if (gpu_samples[n].valid) ++gpu_integrals;
+        else ++empty_domains;
+      } else {
+        // Restore this exact sample. Redrawing after a device/convergence
+        // failure would bias the nuclear average and change the RNG stream.
+        const auto& sample=nuclear_samples[n];
+        tgt->SetHitNucPosition(sample.radius);
+        nucl_model->SetMomentum3(sample.momentum);
+        nucl_model->SetRemovalEnergy(sample.removal);
+        xsec_sum+=ig.Integral(kine_min,kine_max);
+        ++cpu_fallbacks;
+      }
+    }
+    // Preserve the nuclear model's externally visible final sampled state.
+    const auto& last=nuclear_samples.back();
+    tgt->SetHitNucPosition(last.radius);
+    nucl_model->SetMomentum3(last.momentum);
+    nucl_model->SetRemovalEnergy(last.removal);
+    LOG("NewQELXSec", pNOTICE) << "[GPU CCQE] E=" << probeE << ": "
+      << gpu_integrals << " GPU integrals, " << empty_domains << " empty domains, "
+      << cpu_fallbacks << " CPU fallbacks / " << fNumNucleonThrows << " nuclear samples"
+      << (ok ? "" : "; device error: " + gpu_reason);
+    if (fUseGpuAdaptiveIntegration) {
+      LOG("NewQELXSec", pNOTICE) << "[GPU CCQE adaptive] E=" << probeE << ": "
+        << adaptive_recovered << " recovered integrals, " << adaptive_evaluations
+        << " extra evaluations; per-sample budget=" << fGpuAdaptiveMaxEval
+        << (adaptive_error.empty() ? "" : "; device error: " + adaptive_error);
+    }
   }
 
   delete func;
@@ -204,6 +291,11 @@ void NewQELXSec::LoadConfig(void)
   // If true, then the integration of the total cross section will include an
   // MC integration over the initial state nuclear model
   GetParamDef( "AverageOverNucleons", fAverageOverNucleons, true );
+  GetParamDef( "UseGPUIntegration", fUseGpuIntegration, true );
+  GetParamDef( "UseGPUAdaptiveIntegration", fUseGpuAdaptiveIntegration, true );
+  int adaptive_max;
+  GetParamDef( "GPUAdaptiveMaxEval", adaptive_max, 100000 );
+  fGpuAdaptiveMaxEval=adaptive_max>0?static_cast<unsigned>(adaptive_max):0;
 }
 
 genie::utils::gsl::FullQELdXSec::FullQELdXSec(const XSecAlgorithmI* xsec_model,

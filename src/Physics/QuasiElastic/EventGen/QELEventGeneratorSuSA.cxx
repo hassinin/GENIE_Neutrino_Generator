@@ -30,6 +30,10 @@
 #include "Framework/ParticleData/PDGUtils.h"
 #include "Framework/ParticleData/PDGCodes.h"
 #include "Physics/QuasiElastic/EventGen/QELEventGeneratorSuSA.h"
+#include "Physics/QuasiElastic/XSection/SuSAv2QELPXSec.h"
+#include "Physics/HadronTensors/TabulatedLabFrameHadronTensor.h"
+#include "Physics/HadronTensors/HadronTensorI.h"
+#include "gpu_spline/gpu_hadron_tensor.h"
 #include "Physics/Multinucleon/XSection/MECUtils.h"
 
 #include "Physics/NuclearState/NuclearModelI.h"
@@ -38,6 +42,7 @@
 #include "Framework/Utils/PrintUtils.h"
 
 #include "Framework/EventGen/XSecAlgorithmI.h"
+#include "Framework/EventGen/HybridXSecAlgorithm.h"
 
 using namespace genie;
 using namespace genie::controls;
@@ -165,6 +170,54 @@ void QELEventGeneratorSuSA::SelectLeptonKinematics (GHepRecord * event) const
   double XSecMax = this->MaxXSec( event );
 
   LOG("Kinematics", pDEBUG) << "Max XSec = " << XSecMax;
+
+  // Attempt GPU-accelerated rejection sampling if GPU is enabled
+  if ( have_nucleus && gpuspline::GpuHadronTensor::IsGpuEnabled() ) {
+    const SuSAv2QELPXSec* susa = dynamic_cast<const SuSAv2QELPXSec*>(fXSecModel);
+    if (!susa) {
+      const HybridXSecAlgorithm* hybrid = dynamic_cast<const HybridXSecAlgorithm*>(fXSecModel);
+      if (hybrid) {
+        const XSecAlgorithmI* sub = hybrid->ChooseXSecAlg(*interaction);
+        susa = dynamic_cast<const SuSAv2QELPXSec*>(sub);
+      }
+    }
+    if ( susa && susa->IsSuSAv2() && susa->HadronTensorModel() ) {
+      int tensor_pdg = kPdgTgtC12;
+      HadronTensorType_t tensor_type = kHT_QE_Full;
+      if ( interaction->ProcInfo().IsEM() ) {
+        int hit_nuc_pdg = interaction->InitState().Tgt().HitNucPdg();
+        if ( pdg::IsProton(hit_nuc_pdg) ) tensor_type = kHT_QE_EM_proton;
+        else if ( pdg::IsNeutron(hit_nuc_pdg) ) tensor_type = kHT_QE_EM_neutron;
+        else tensor_type = kHT_QE_EM;
+      }
+      const TabulatedLabFrameHadronTensor* tensor = dynamic_cast<const TabulatedLabFrameHadronTensor*>(
+          susa->HadronTensorModel()->GetTensor(tensor_pdg, tensor_type));
+      if ( tensor && tensor->HasGpuTensor() ) {
+        double Delta_Q_value = susa->Qvalue(*interaction);
+        double out_Tl = 0.0, out_ctl = 0.0, out_xsec = 0.0;
+        const double scale = susa->ScalingFactor(*interaction);
+        bool gpu_ok = scale > 0.0 && tensor->SampleKinematicsGPU(
+            NuPDG, Enu, interaction->InitState().Probe()->Mass(), LepMass,
+            Delta_Q_value, TMin, TMax, CosthMin, CosthMax,
+            XSecMax / scale, true /* use_rosenbluth */,
+            out_Tl, out_ctl, out_xsec, fQ3Max, Q2min);
+        if ( gpu_ok ) {
+          T = out_Tl;
+          Costh = out_ctl;
+          Plep = TMath::Sqrt( T * (T + (2.0 * LepMass)));
+          Q3 = TMath::Sqrt(Plep*Plep + Enu*Enu - 2.0 * Plep * Enu * Costh);
+          Q0 = Enu - (T + LepMass);
+          Q2 = Q3*Q3 - Q0*Q0;
+          if ( Q3 < fQ3Max && Q2 >= Q2min ) {
+            kinematics->SetKV(kKVTl, T);
+            kinematics->SetKV(kKVctl, Costh);
+            accept = true;
+            LOG("QELEvent", pNOTICE) << "[GPU SuSAv2 QEL] Sampled: T=" << T << ", Costh=" << Costh << ", Q2=" << Q2;
+          }
+        }
+      }
+    }
+  }
 
   // loop over different (randomly) selected T and Costh
   while (!accept) {

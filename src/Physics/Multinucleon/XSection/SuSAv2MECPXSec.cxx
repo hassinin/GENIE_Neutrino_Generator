@@ -136,28 +136,8 @@ double SuSAv2MECPXSec::XSec(const Interaction* interaction,
   // This scaling should be okay-ish for the total xsec, but it misses
   // the energy shift. To get this we should really just build releveant
   // hadron tensors but there may be some ways to approximate it.
-  // For more details see Guille's thesis: https://idus.us.es/xmlui/handle/11441/74826
-  if ( need_to_scale ) {
-    FermiMomentumTablePool * kftp = FermiMomentumTablePool::Instance();
-    const FermiMomentumTable * kft = kftp->GetTable(fKFTable);
-    double KF_tgt = kft->FindClosestKF(target_pdg, kPdgProton);
-    double KF_ten = kft->FindClosestKF(tensor_pdg, kPdgProton);
-    LOG("SuSAv2MEC", pDEBUG) << "KF_tgt = " << KF_tgt;
-    LOG("SuSAv2MEC", pDEBUG) << "KF_ten = " << KF_ten;
-    double A_ten  = pdg::IonPdgCodeToA(tensor_pdg);
-    double scaleFact = (A_request/A_ten)*(KF_tgt/KF_ten)*(KF_tgt/KF_ten);
-    xsec *= scaleFact;
-  }
-
-  // Apply given overall scaling factor
-
-  const ProcessInfo& proc_info = interaction->ProcInfo();
-  if( proc_info.IsWeakCC() ) xsec *= fXSecCCScale;
-  else if( proc_info.IsWeakNC() ) xsec *= fXSecNCScale;
-  else if( proc_info.IsEM() ) xsec *= fXSecEMScale;
-
-  // Scale given a scaling algorithm:
-  if( fMECScaleAlg ) xsec *= fMECScaleAlg->GetScaling( * interaction ) ;
+  // Apply overall model scaling factor
+  xsec *= this->ScalingFactor(*interaction);
 
   if ( kps != kPSTlctl ) {
     LOG("SuSAv2MEC", pWARN)
@@ -396,6 +376,33 @@ double SuSAv2MECPXSec::Qvalue(const Interaction & interaction ) const
   if ( isEM ) Delta_Q_value -= 2. * Eb_ten;
 
   return Delta_Q_value ;
+}
+//_________________________________________________________________________
+double SuSAv2MECPXSec::ScalingFactor(const Interaction& interaction) const
+{
+  int target_pdg = interaction.InitState().Tgt().Pdg();
+  int tensor_pdg = kPdgTgtC12;
+  int A_request = pdg::IonPdgCodeToA(target_pdg);
+  bool need_to_scale = (target_pdg != tensor_pdg);
+
+  double scaleFact = 1.0;
+  if ( need_to_scale ) {
+    FermiMomentumTablePool * kftp = FermiMomentumTablePool::Instance();
+    const FermiMomentumTable * kft = kftp->GetTable(fKFTable);
+    double KF_tgt = kft->FindClosestKF(target_pdg, kPdgProton);
+    double KF_ten = kft->FindClosestKF(tensor_pdg, kPdgProton);
+    double A_ten  = pdg::IonPdgCodeToA(tensor_pdg);
+    scaleFact = (A_request/A_ten)*(KF_tgt/KF_ten)*(KF_tgt/KF_ten);
+  }
+
+  const ProcessInfo& proc_info = interaction.ProcInfo();
+  if( proc_info.IsWeakCC() ) scaleFact *= fXSecCCScale;
+  else if( proc_info.IsWeakNC() ) scaleFact *= fXSecNCScale;
+  else if( proc_info.IsEM() ) scaleFact *= fXSecEMScale;
+
+  if( fMECScaleAlg ) scaleFact *= fMECScaleAlg->GetScaling(interaction);
+
+  return scaleFact;
 }
 //_________________________________________________________________________
 void SuSAv2MECPXSec::Configure(const Registry& config)

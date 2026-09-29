@@ -310,7 +310,7 @@ double SuSAv2QELPXSec::XSec(const Interaction* interaction,
 	// in the SuSAv2 and CRPA/HF tensors so I'll set it to 0.
 	// However, if I want to scale I need to account for the altered
 	// binding energy. To first order I can use the Q_value for this
-	double Delta_Q_value_susa = Eb_tgt-Eb_ten_susa;
+	double Delta_Q_value_susa = this->Qvalue(*interaction);
 	double Delta_Q_value_crpa = Eb_tgt-Eb_ten_crpa;
 	double Delta_Q_value_blen = Eb_tgt-Eb_ten_crpa;
 
@@ -320,15 +320,10 @@ double SuSAv2QELPXSec::XSec(const Interaction* interaction,
 		// The QvalueShifter, is a relative shift to the Q_value.
 		// The Q_value was already taken into account in the hadron tensor. Here we recalculate it
 		// to get the right absolute shift.
-		double tensor_Q_value_susa = genie::utils::mec::Qvalue(tensor_pdg_susa,probe_pdg);
-		double total_Q_value_susa = tensor_Q_value_susa + Delta_Q_value_susa ;
-		double Q_value_shift_susa = total_Q_value_susa * fQvalueShifter -> Shift( interaction->InitState().Tgt() ) ;
-
 		double tensor_Q_value_crpa = genie::utils::mec::Qvalue(tensor_pdg_crpa,probe_pdg);
 		double total_Q_value_crpa = tensor_Q_value_crpa + Delta_Q_value_crpa ;
 		double Q_value_shift_crpa = total_Q_value_crpa * fQvalueShifter -> Shift( interaction->InitState().Tgt() ) ;
 
-		Delta_Q_value_susa += Q_value_shift_susa;
 		Delta_Q_value_crpa += Q_value_shift_crpa;
 		Delta_Q_value_blen += Q_value_shift_crpa;
 	}
@@ -550,6 +545,20 @@ double SuSAv2QELPXSec::XSecScaling(double xsec, const Interaction* interaction, 
 }
 
 //_________________________________________________________________________
+double SuSAv2QELPXSec::ScalingFactor(const Interaction& interaction) const
+{
+	int target_pdg = interaction.InitState().Tgt().Pdg();
+	int tensor_pdg = kPdgTgtC12;
+	bool need_to_scale = (target_pdg != tensor_pdg);
+
+	double scale = XSecScaling(1.0, &interaction, target_pdg, tensor_pdg, need_to_scale);
+	if (interaction.ProcInfo().IsWeakCC()) scale *= fXSecCCScale;
+	else if (interaction.ProcInfo().IsWeakNC()) scale *= fXSecNCScale;
+	else if (interaction.ProcInfo().IsEM()) scale *= fXSecEMScale;
+	return scale;
+}
+
+//_________________________________________________________________________
 double SuSAv2QELPXSec::Integral(const Interaction* interaction) const
 {
 	double xsec = fXSecIntegrator->Integrate(this, interaction);
@@ -663,4 +672,83 @@ void SuSAv2QELPXSec::LoadConfig(void)
 		exit(78) ;
 	}
 
+}
+//_________________________________________________________________________
+bool SuSAv2QELPXSec::IsSuSAv2() const
+{
+	return (modelConfig == kMd_SuSAv2);
+}
+//_________________________________________________________________________
+double SuSAv2QELPXSec::Qvalue(const Interaction & interaction) const
+{
+	int target_pdg = interaction.InitState().Tgt().Pdg();
+	int probe_pdg = interaction.InitState().ProbePdg();
+	int tensor_pdg_susa = kPdgTgtC12;
+	int A_request = pdg::IonPdgCodeToA(target_pdg);
+	int Z_request = pdg::IonPdgCodeToZ(target_pdg);
+
+	double Eb_tgt = 0;
+	double Eb_ten_susa = 0;
+
+	if ( A_request <= 4 ) {
+		Eb_tgt = fEbHe;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+	else if (A_request < 9) {
+		Eb_tgt = fEbLi;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+	else if (A_request >= 9 && A_request < 15) {
+		Eb_tgt = fEbC;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+	else if(A_request >= 15 && A_request < 22) {
+		Eb_tgt = fEbO;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+	else if(A_request == 40 && Z_request == 18) {
+		Eb_tgt = fEbAr;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+	else if(A_request >= 22 && A_request < 40) {
+		Eb_tgt = fEbMg;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+	else if(A_request >= 40 && A_request < 56) {
+		Eb_tgt = fEbAr;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+	else if(A_request >= 56 && A_request < 119) {
+		Eb_tgt = fEbFe;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+	else if(A_request >= 119 && A_request < 206) {
+		Eb_tgt = fEbSn;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+	else if(A_request >= 206) {
+		Eb_tgt = fEbPb;
+		tensor_pdg_susa = kPdgTgtC12;
+		Eb_ten_susa = fEbC;
+	}
+
+	double Delta_Q_value_susa = Eb_tgt - Eb_ten_susa;
+
+	if ( fQvalueShifter ) {
+		double tensor_Q_value_susa = genie::utils::mec::Qvalue(tensor_pdg_susa, probe_pdg);
+		double total_Q_value_susa = tensor_Q_value_susa + Delta_Q_value_susa;
+		double Q_value_shift_susa = total_Q_value_susa * fQvalueShifter->Shift( interaction.InitState().Tgt() );
+		Delta_Q_value_susa += Q_value_shift_susa;
+	}
+
+	return Delta_Q_value_susa;
 }

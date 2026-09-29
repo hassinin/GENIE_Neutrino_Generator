@@ -16,10 +16,12 @@ PACKAGE           = Physics/HadronTensors
 PACKAGE_ABBREV    = PhHadTens
 DICTIONARY        = _ROOT_DICT_$(PACKAGE_ABBREV)
 LIBNAME           = libG$(PACKAGE_ABBREV)
-EXTRA_EXT_LIBS    =
+EXTRA_EXT_LIBS    = -L$(GENIE)/gpu_spline/lib -lgpuspline -L/usr/local/cuda-12.9/lib64 -lcudart -Wl,-rpath,$(GENIE)/gpu_spline/lib -Wl,-rpath,/usr/local/cuda-12.9/lib64
 
 all     : rootcint lib lib-link
 install : install-inc install-lib
+
+TabulatedLabFrameHadronTensor.o: $(GENIE)/gpu_spline/include/gpu_spline/gpu_hadron_tensor.h
 
 # Include standard package makefile targets
 #

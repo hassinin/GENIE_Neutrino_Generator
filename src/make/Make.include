@@ -49,7 +49,7 @@ GENIE_INC_INSTALLATION_PATH     := $(GENIE_INCBASE_INSTALLATION_PATH)/GENIE
 
 # GENIE header files base dir
 #
-GENIE_INCLUDES := -I$(GENIE)/src/
+GENIE_INCLUDES := -I$(GENIE)/src/ -I$(GENIE)/gpu_spline/include -I/usr/local/cuda-12.9/include
 
 # The following will be appended in the library name
 #

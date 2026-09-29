@@ -12,6 +12,7 @@
 #include <cmath>
 #include <limits>
 #include <sstream>
+#include <memory>
 
 // ROOT includes
 #include "TDatabasePDG.h"
@@ -111,11 +112,17 @@ double genie::utils::ComputeFullQELPXSec(genie::Interaction* interaction,
   double mNf = tb->GetParticle( interaction->RecoilNucleonPdg() )->Mass();
 
   // Mandelstam s for the probe/hit nucleon system
-  double s = std::pow( interaction->InitState().CMEnergy(), 2 );
+  std::unique_ptr<TLorentzVector> probe(
+    interaction->InitState().GetProbeP4(kRfLab));
+  const TLorentzVector total = *probe + interaction->InitState().Tgt().HitNucP4();
+  const double s = total.M2();
+  // Test the invariant before taking a square root or constructing a boost.
+  // Full spectral functions can sample spacelike initial nucleons and totals.
+  if (!(total.E() > 0.) || !std::isfinite(s) || !(s > 0.)) return 0.;
 
   // Return a differential cross section of zero if we're below threshold (and
   // therefore need to sample a new event)
-  if ( std::sqrt(s) < lepMass + mNf ) return 0.;
+  if ( std::sqrt(s) <= lepMass + mNf ) return 0.;
 
   double outLeptonEnergy = ( s - mNf*mNf + lepMass*lepMass ) / (2 * std::sqrt(s));
 

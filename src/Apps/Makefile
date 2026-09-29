@@ -16,7 +16,7 @@ GENIE_LIBS  = $(shell $(GENIE)/src/scripts/setup/genie-config --libs)
 
 # Mac OS X -bind_at_load means we must list the low level libraries
 # first, and each stage must fully resolved before the next library
-LIBRARIES  := $(LIBRARIES) $(GENIE_LIBS)
+LIBRARIES  := $(LIBRARIES) $(GENIE_LIBS) -L$(GENIE)/gpu_spline/lib -lgpuspline -L/usr/local/cuda-12.9/lib64 -lcudart -Wl,-rpath,$(GENIE)/gpu_spline/lib -Wl,-rpath,/usr/local/cuda-12.9/lib64
 #LIBRARIES  := $(LIBRARIES) $(CERN_LIBRARIES) $(GENIE_LIBS)
 
 TGT_BASE =  gevgen             \

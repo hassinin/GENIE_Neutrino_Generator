@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <set>
 
 // GENIE includes
 #include "Framework/Messenger/Messenger.h"
@@ -257,10 +258,14 @@ void genie::TabulatedHadronTensorModelI::LoadConfig(void)
 //____________________________________________________________________________
 genie::TabulatedHadronTensorModelI::~TabulatedHadronTensorModelI()
 {
+  std::set<HadronTensorI*> deleted;
   std::map< HadronTensorID, HadronTensorI* >::iterator it;
   for (it = fTensors.begin(); it != fTensors.end(); ++it) {
     HadronTensorI* t = it->second;
-    if ( t ) delete t;
+    if ( t && deleted.find(t) == deleted.end() ) {
+      deleted.insert(t);
+      delete t;
+    }
   }
   fTensors.clear();
 }

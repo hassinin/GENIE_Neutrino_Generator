@@ -317,9 +317,7 @@ double NievesSimoVacasMECPXSec2016::XSec(
   double xsec = (pn) ? xsec_pn : xsec_all;
 
   // Apply given scaling factor
-  const ProcessInfo& proc_info = interaction->ProcInfo();
-  if( proc_info.IsWeakCC() ) xsec *= fXSecCCScale;
-  else if( proc_info.IsWeakNC() ) xsec *= fXSecNCScale;
+  xsec *= TensorScale(*interaction);
 
   if( fMECScaleAlg ) xsec *= fMECScaleAlg->GetScaling( * interaction ) ;
 
@@ -414,4 +412,12 @@ void NievesSimoVacasMECPXSec2016::LoadConfig(void)
     exit(78) ;
   }
 
+}
+
+// Overall normalization for the unmodified hadron tensor.
+double NievesSimoVacasMECPXSec2016::TensorScale(const Interaction& interaction) const
+{
+  if (interaction.ProcInfo().IsWeakCC()) return fXSecCCScale;
+  if (interaction.ProcInfo().IsWeakNC()) return fXSecNCScale;
+  return 1.0;
 }

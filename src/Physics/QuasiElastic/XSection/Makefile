@@ -15,7 +15,7 @@ PACKAGE           = Physics/QuasiElastic/XSection
 PACKAGE_ABBREV    = PhQELXS
 DICTIONARY        = _ROOT_DICT_$(PACKAGE_ABBREV)
 LIBNAME           = libG$(PACKAGE_ABBREV)
-EXTRA_EXT_LIBS    =
+EXTRA_EXT_LIBS    = -L$(GENIE)/gpu_spline/lib -lgpuspline
 
 all     : rootcint lib lib-link
 install : install-inc install-lib

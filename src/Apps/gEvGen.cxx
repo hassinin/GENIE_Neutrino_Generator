@@ -31,6 +31,8 @@ Syntax:
              [--force-flux-ray-interaction]
              [--seed random_number_seed]
              [--cross-sections xml_file]
+             [--use-gpu]
+             [--gpu-device device_id]
 
              // command line args handled by RunOpt:
              [--event-generator-list list_name] // default "Default"
@@ -185,6 +187,7 @@ Syntax:
 #include "Framework/Utils/PrintUtils.h"
 #include "Framework/Utils/SystemUtils.h"
 #include "Framework/Utils/CmdLnArgParser.h"
+#include "gpu_spline/gpu_hadron_tensor.h"
 
 #ifdef __GENIE_FLUX_DRIVERS_ENABLED__
 #ifdef __GENIE_GEOM_DRIVERS_ENABLED__
@@ -240,6 +243,8 @@ long int        gOptRanSeed;      // random number seed
 string          gOptInpXSecFile;  // cross-section splines
 string          gOptOutFileName;  // Optional outfile name
 string          gOptStatFileName; // Status file name, set if gOptOutFileName was set.
+bool            gOptUseGpu = false; // Use GPU flux ray pre-selection
+int             gOptGpuDeviceId = 0;// GPU device ID
 
 //____________________________________________________________________________
 int main(int argc, char ** argv)
@@ -376,6 +381,10 @@ void GenerateEventsUsingFluxOrTgtMix(void)
   mcj_driver->UseGeomAnalyzer(geom_driver);
   if(gOptForceInt)
         mcj_driver->ForceInteraction();
+  if(gOptUseGpu) {
+        mcj_driver->SetGpuDeviceId(gOptGpuDeviceId);
+        mcj_driver->UseGpuPreselection(true);
+  }
   mcj_driver->Configure();
   mcj_driver->UseSplines();
   if(!gOptWeighted)
@@ -418,6 +427,10 @@ void GenerateEventsUsingFluxOrTgtMix(void)
      ievent++;
      delete event;
   }
+
+  LOG("gevgen", pNOTICE)
+     << "Event generation complete. Generated " << ievent << " events. "
+     << "Total flux neutrinos thrown: " << mcj_driver->NFluxNeutrinos();
 
   // Save the generated MC events
   ntpw.Save();
@@ -816,6 +829,17 @@ void GetCommandLineArgs(int argc, char ** argv)
     gOptInpXSecFile = "";
   }
 
+  // GPU pre-selection and hadron tensor acceleration option
+  if( parser.OptionExists("use-gpu") ) {
+    gOptUseGpu = true;
+    if( parser.OptionExists("gpu-device") ) {
+      gOptGpuDeviceId = parser.ArgAsInt("gpu-device");
+    }
+    gpuspline::GpuHadronTensor::SetDefaultDevice(gOptGpuDeviceId);
+    gpuspline::GpuHadronTensor::SetGpuEnabled(true);
+    setenv("GENIE_USE_GPU", "1", 1);
+  }
+
   //
   // print-out the command line options
   //
@@ -846,6 +870,12 @@ void GetCommandLineArgs(int argc, char ** argv)
        << "Generate weighted events? " << gOptWeighted;
   LOG("gevgen", pNOTICE)
        << "Force interaction of all flux rays? " << gOptForceInt;
+  LOG("gevgen", pNOTICE)
+       << "Use GPU acceleration (Flux & Hadron Tensors)? " << (gOptUseGpu ? "YES" : "NO");
+  if(gOptUseGpu) {
+     LOG("gevgen", pNOTICE)
+          << "GPU device ID: " << gOptGpuDeviceId;
+  }
   if(gOptNuEnergyRange>0) {
      LOG("gevgen", pNOTICE)
         << "Neutrino energy: ["
