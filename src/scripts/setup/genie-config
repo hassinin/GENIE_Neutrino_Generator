@@ -140,6 +140,9 @@ fi
 if test "$GOPT_ENABLE_PROFESSOR2" = "YES"; then
   features="$features professor2"
 fi
+if test "$GOPT_ENABLE_GPU" = "YES"; then
+  features="$features gpu"
+fi
 
 
 

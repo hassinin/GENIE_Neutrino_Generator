@@ -9,6 +9,7 @@
 //____________________________________________________________________________
 
 #include <cassert>
+#include <cstdlib>
 
 #include <TVector3.h>
 #include <TSystem.h>
@@ -36,8 +37,158 @@
 #include "Framework/Utils/XSecSplineList.h"
 #include "Framework/Conventions/Constants.h"
 
+#ifdef __GENIE_GPU_ENABLED__
+#include "gpu_spline/gpu_spline_engine.h"
+#include "gpu_spline/gpu_flux_preselector.h"
+#include "gpu_spline/gpu_status.h"
+#endif
+#include <sstream>
+
 using namespace genie;
 using namespace genie::constants;
+
+#ifdef __GENIE_GPU_ENABLED__
+namespace {
+
+class GpuProxyFluxDriver : public GFluxI {
+public:
+  GpuProxyFluxDriver(GFluxI* real_flux, gpu_spline::GpuFluxPreselector* preselector, double* nflux_counter)
+    : fRealFlux(real_flux),
+      fPreselector(preselector),
+      fNFluxCounter(nflux_counter),
+      fCurPdg(0),
+      fCurP4(0,0,0,0),
+      fCurX4(0,0,0,0),
+      fCurWeight(1.0),
+      fCurIndex(0),
+      fCurR(0.0),
+      fCurPsum(0.0),
+      fGpuFailed(false)
+  {}
+
+  virtual ~GpuProxyFluxDriver() {}
+
+  virtual const PDGCodeList & FluxParticles (void) { return fRealFlux->FluxParticles(); }
+  virtual double MaxEnergy (void) { return fRealFlux->MaxEnergy(); }
+  virtual bool End (void) {
+    if (fPreselector && fPreselector->HasCandidates()) return false;
+    const bool ended = fRealFlux->End();
+    if (ended && fPreselector) {
+      *fNFluxCounter += fPreselector->FlushTrailingRejected();
+    }
+    return ended;
+  }
+  virtual long int Index (void) { return fCurIndex; }
+  virtual void Clear (Option_t * opt) { fRealFlux->Clear(opt); }
+  virtual void GenerateWeighted (bool gen_weighted) { fRealFlux->GenerateWeighted(gen_weighted); }
+
+  virtual bool GenerateNext (void) {
+    RandomGen * rnd = RandomGen::Instance();
+
+    while (!fPreselector->HasCandidates()) {
+      if (fRealFlux->End()) {
+        *fNFluxCounter += fPreselector->FlushTrailingRejected();
+        return false;
+      }
+
+      size_t batch_size = fPreselector->GetBatchSize();
+      std::vector<double> energies;
+      std::vector<int> nupdgs;
+      std::vector<double> rndms;
+      std::vector<gpu_spline::RayAuxData> aux;
+
+      energies.reserve(batch_size);
+      nupdgs.reserve(batch_size);
+      rndms.reserve(batch_size);
+      aux.reserve(batch_size);
+
+      size_t count = 0;
+      while (count < batch_size && !fRealFlux->End()) {
+        bool ok = fRealFlux->GenerateNext();
+        if (!ok) break;
+
+        const TLorentzVector & p4 = fRealFlux->Momentum();
+        const TLorentzVector & x4 = fRealFlux->Position();
+        int pdg = fRealFlux->PdgCode();
+        double r = rnd->RndEvg().Rndm();
+
+        energies.push_back(p4.Energy());
+        nupdgs.push_back(pdg);
+        rndms.push_back(r);
+
+        gpu_spline::RayAuxData a;
+        a.px = p4.Px(); a.py = p4.Py(); a.pz = p4.Pz(); a.E = p4.E();
+        a.x  = x4.X();  a.y  = x4.Y();  a.z  = x4.Z();  a.t  = x4.T();
+        a.weight = fRealFlux->Weight();
+        a.index  = fRealFlux->Index();
+        aux.push_back(a);
+
+        count++;
+      }
+
+      if (count == 0) {
+        *fNFluxCounter += fPreselector->FlushTrailingRejected();
+        return false;
+      }
+
+      // After a device error (here or in any other GPU path) every batch is
+      // selected on the CPU with the same random numbers and bookkeeping, so
+      // the flux-neutrino count stays exact.
+      if (fGpuFailed || gpu_spline::GpuDisabled()) {
+        fPreselector->FilterRayBatchHost(energies.data(), nupdgs.data(), rndms.data(), aux.data(), count);
+      } else {
+        try {
+          fPreselector->FilterRayBatch(energies.data(), nupdgs.data(), rndms.data(), aux.data(), count);
+        } catch (const gpu_spline::GpuDeviceError & e) {
+          if (gpu_spline::DisableGpu(e.what())) {
+            LOG("GMCJDriver", pERROR)
+              << "[GPU] CUDA error in flux preselection: " << e.what()
+              << ". Disabling the GPU for the rest of this job; continuing on the CPU.";
+          }
+          fGpuFailed = true;
+          fPreselector->FilterRayBatchHost(energies.data(), nupdgs.data(), rndms.data(), aux.data(), count);
+        }
+      }
+    }
+
+    gpu_spline::AcceptedRay cand = fPreselector->PopCandidate();
+    fCurPdg = cand.nupdg;
+    fCurP4.SetPxPyPzE(cand.px, cand.py, cand.pz, cand.E);
+    fCurX4.SetXYZT(cand.x, cand.y, cand.z, cand.t);
+    fCurWeight = cand.weight;
+    fCurIndex = cand.index;
+    fCurR = cand.R;
+    fCurPsum = cand.Psum;
+
+    *fNFluxCounter += cand.thrown_before_this;
+
+    return true;
+  }
+
+  virtual int PdgCode (void) { return fCurPdg; }
+  virtual double Weight (void) { return fCurWeight; }
+  virtual const TLorentzVector & Momentum (void) { return fCurP4; }
+  virtual const TLorentzVector & Position (void) { return fCurX4; }
+
+  double GetLastR (void) const { return fCurR; }
+  double GetLastPsum (void) const { return fCurPsum; }
+
+private:
+  GFluxI *                         fRealFlux;
+  gpu_spline::GpuFluxPreselector * fPreselector;
+  double *                         fNFluxCounter;
+  int                              fCurPdg;
+  TLorentzVector                   fCurP4;
+  TLorentzVector                   fCurX4;
+  double                           fCurWeight;
+  long int                         fCurIndex;
+  double                           fCurR;
+  double                           fCurPsum;
+  bool                             fGpuFailed;
+};
+
+} // anonymous namespace
+#endif // __GENIE_GPU_ENABLED__
 
 //____________________________________________________________________________
 GMCJDriver::GMCJDriver()
@@ -61,6 +212,22 @@ GMCJDriver::~GMCJDriver()
 
   if(fFluxIntTree) delete fFluxIntTree;
   if(fFluxIntProbFile) delete fFluxIntProbFile;
+
+#ifdef __GENIE_GPU_ENABLED__
+  if(fGpuProxyFlux) {
+    delete static_cast<GpuProxyFluxDriver*>(fGpuProxyFlux);
+    fGpuProxyFlux = 0;
+    fFluxDriver = fActualFluxDriver;
+  }
+  if(fGpuPreselector) {
+    delete static_cast<gpu_spline::GpuFluxPreselector*>(fGpuPreselector);
+    fGpuPreselector = 0;
+  }
+  if(fGpuSplineEngine) {
+    delete static_cast<gpu_spline::GpuSplineEngine*>(fGpuSplineEngine);
+    fGpuSplineEngine = 0;
+  }
+#endif
 }
 //___________________________________________________________________________
 void GMCJDriver::SetEventGeneratorList(string listname)
@@ -187,6 +354,19 @@ void GMCJDriver::PreSelectEvents(bool preselect)
 // should be turned off if using pre-generated interaction probabilities
 // calculated from a given flux file.
   fPreSelect = preselect;
+}
+//___________________________________________________________________________
+void GMCJDriver::UseGpuPreselection(bool use_gpu)
+{
+#ifdef __GENIE_GPU_ENABLED__
+  fUseGpuPreselection = use_gpu;
+#else
+  if (use_gpu) {
+    LOG("GMCJDriver", pWARN)
+      << "GENIE was built without GPU support (configure --enable-gpu); using CPU flux selection.";
+  }
+  fUseGpuPreselection = false;
+#endif
 }
 //___________________________________________________________________________
 bool GMCJDriver::PreCalcFluxProbabilities(void)
@@ -474,6 +654,14 @@ void GMCJDriver::InitJob(void)
   fForceInteraction   = false; // <-- default opt to not force the interaction
   fGenerateUnweighted = false; // <-- default opt to generate weighted events
   fPreSelect          = true;  // <-- default to use pre-selection based on maximum path lengths
+
+  fUseGpuPreselection = false; // <-- default opt to use GPU pre-selection
+  fGpuDeviceId        = 0;
+  fGpuPreselectorInit = false;
+  fGpuSplineEngine    = 0;
+  fGpuPreselector     = 0;
+  fGpuProxyFlux       = 0;
+  fActualFluxDriver   = 0;
 
   fSelTgtPdg          = 0;
   fCurEvt             = 0;
@@ -816,6 +1004,7 @@ EventRecord * GMCJDriver::GenerateEvent(void)
 {
   LOG("GMCJDriver", pNOTICE) << "Generating next event...";
 
+  this->InitGpuPreselection();
   this->InitEventGeneration();
 
   while(1) {
@@ -841,6 +1030,130 @@ EventRecord * GMCJDriver::GenerateEvent(void)
   return 0;
 }
 //___________________________________________________________________________
+void GMCJDriver::InitGpuPreselection(void)
+{
+#ifdef __GENIE_GPU_ENABLED__
+  if (!fUseGpuPreselection || fGpuPreselectorInit) return;
+  if (gpu_spline::GpuDisabled()) {
+    LOG("GMCJDriver", pNOTICE) << "Using CPU flux selection: the GPU was disabled after an earlier device error ("
+                               << gpu_spline::GpuDisableReason() << ").";
+    fUseGpuPreselection = false;
+    return;
+  }
+  // The kernel uses a single global probability scale. Weighted and forced
+  // interactions require the CPU driver's different acceptance rules.
+  if (!fGenerateUnweighted || fForceInteraction || !fPreSelect || fFluxIntTree) {
+    LOG("GMCJDriver", pNOTICE) << "Using CPU flux selection for this weighting configuration.";
+    fUseGpuPreselection = false;
+    return;
+  }
+  if (!fFluxDriver) {
+    LOG("GMCJDriver", pERROR) << "Cannot initialize GPU preselector: No flux driver!";
+    return;
+  }
+  // The kernel only maps the six neutrino flavours to cross-section splines;
+  // any other flux species would get zero probability and always be rejected.
+  const PDGCodeList & flux_particles = fFluxDriver->FluxParticles();
+  for (PDGCodeList::const_iterator it = flux_particles.begin(); it != flux_particles.end(); ++it) {
+    const int pdgc = std::abs(*it);
+    if (pdgc != 12 && pdgc != 14 && pdgc != 16) {
+      LOG("GMCJDriver", pNOTICE) << "Using CPU flux selection: flux species "
+                                 << *it << " is not supported by GPU preselection.";
+      fUseGpuPreselection = false;
+      return;
+    }
+  }
+
+  LOG("GMCJDriver", pNOTICE) << "Initializing GPU batched flux pre-filtering engine...";
+
+  gpu_spline::GpuSplineEngine * engine = new gpu_spline::GpuSplineEngine();
+  gpu_spline::GpuFluxPreselector * preselector = new gpu_spline::GpuFluxPreselector(engine);
+
+  PathLengthList::const_iterator pliter;
+  std::vector<int> nu_flavors = {12, -12, 14, -14, 16, -16};
+
+  for(pliter = fMaxPathLengths.begin(); pliter != fMaxPathLengths.end(); ++pliter) {
+     int mpdg = pliter->first;
+     double max_pl = pliter->second;
+     int A = pdg::IonPdgCodeToA(mpdg);
+     if (max_pl <= 0.0) continue;
+
+     gpu_spline::MaterialConfig mat;
+     mat.target_pdg = mpdg;
+     mat.A = A;
+     mat.max_pl = max_pl;
+     mat.spline_id_nue = -1;
+     mat.spline_id_nuebar = -1;
+     mat.spline_id_numu = -1;
+     mat.spline_id_numubar = -1;
+     mat.spline_id_nutau = -1;
+     mat.spline_id_nutaubar = -1;
+
+     for (int nupdg : nu_flavors) {
+        InitialState init_state(mpdg, nupdg);
+        GEVGDriver * evgdriver = fGPool->FindDriver(init_state);
+        if (!evgdriver) continue;
+
+        const Spline * totxsecspl = evgdriver->XSecSumSpline();
+        if (!totxsecspl) continue;
+
+        int nk = totxsecspl->NKnots();
+        std::vector<double> x_knots(nk);
+        std::vector<double> y_knots(nk);
+        for(int k = 0; k < nk; ++k) {
+           totxsecspl->GetKnot(k, x_knots[k], y_knots[k]);
+        }
+
+        std::ostringstream sp_name;
+        sp_name << "tgt:" << mpdg << ";nu:" << nupdg;
+        int sp_id = engine->AddSpline(sp_name.str(), x_knots, y_knots);
+
+        switch(nupdg) {
+           case  12: mat.spline_id_nue = sp_id; break;
+           case -12: mat.spline_id_nuebar = sp_id; break;
+           case  14: mat.spline_id_numu = sp_id; break;
+           case -14: mat.spline_id_numubar = sp_id; break;
+           case  16: mat.spline_id_nutau = sp_id; break;
+           case -16: mat.spline_id_nutaubar = sp_id; break;
+        }
+     }
+
+     preselector->AddMaterial(mat);
+  }
+
+  // Initialize GPU device tables
+  if (!engine->InitializeDevice(fGpuDeviceId)) {
+     LOG("GMCJDriver", pERROR) << "Failed to initialize GPU spline device tables! Falling back to CPU.";
+     delete preselector;
+     delete engine;
+     fUseGpuPreselection = false;
+     return;
+  }
+
+  preselector->SetGlobalPmax(fGlobPmax);
+  preselector->SetBatchSize(50000);
+  if (!preselector->InitializeDevice(fGpuDeviceId)) {
+     LOG("GMCJDriver", pERROR) << "Failed to initialize GPU flux preselector device memory! Falling back to CPU.";
+     delete preselector;
+     delete engine;
+     fUseGpuPreselection = false;
+     return;
+  }
+
+  fGpuSplineEngine = engine;
+  fGpuPreselector  = preselector;
+
+  // Wrap flux driver with proxy
+  fActualFluxDriver = fFluxDriver;
+  GpuProxyFluxDriver * proxy = new GpuProxyFluxDriver(fActualFluxDriver, preselector, &fNFluxNeutrinos);
+  fGpuProxyFlux = proxy;
+  fFluxDriver   = proxy;
+
+  fGpuPreselectorInit = true;
+  LOG("GMCJDriver", pNOTICE) << "GPU batched flux pre-filtering successfully activated on device " << fGpuDeviceId;
+#endif // __GENIE_GPU_ENABLED__
+}
+//___________________________________________________________________________
 EventRecord * GMCJDriver::GenerateEvent1Try(void)
 {
 // attempt generating a neutrino interaction by firing a single flux neutrino
@@ -858,6 +1171,13 @@ EventRecord * GMCJDriver::GenerateEvent1Try(void)
         << "** Rejecting current flux neutrino (flux driver err)";
      return 0;
   }
+
+#ifdef __GENIE_GPU_ENABLED__
+  if (fUseGpuPreselection && fGpuProxyFlux) {
+     GpuProxyFluxDriver * proxy = static_cast<GpuProxyFluxDriver*>(fGpuProxyFlux);
+     R = proxy->GetLastR();
+  }
+#endif
 
   if (fForceInteraction) {
     bool pl_ok = this->ComputePathLengths();
@@ -882,7 +1202,7 @@ EventRecord * GMCJDriver::GenerateEvent1Try(void)
     // the number of neutrinos that I need to propagate through the
     // actual detector geometry (this is skipped when using
     // pre-calculated flux interaction probabilities)
-    if(fPreSelect) {
+    if(fPreSelect && !fUseGpuPreselection) {
          LOG("GMCJDriver", pNOTICE)
             << "Computing interaction probabilities for max. path lengths";
 

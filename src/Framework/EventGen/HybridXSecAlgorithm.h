@@ -45,6 +45,9 @@ public:
   double Integral(const Interaction* i) const;
   bool   ValidProcess(const Interaction* i) const;
 
+  /// Retrieve a pointer to the appropriate cross section algorithm
+  const XSecAlgorithmI* ChooseXSecAlg(const Interaction& interaction) const;
+
   // override the Algorithm::Configure methods to load configuration
   // data to private data members
   void Configure (const Registry & config);
@@ -54,11 +57,6 @@ private:
 
   /// Load algorithm configuration
   void LoadConfig (void);
-
-  /// Retrieve a pointer to the appropriate cross section algorithm
-  /// using the map. If no suitable algorithm was found, return a
-  /// null pointer.
-  const XSecAlgorithmI* ChooseXSecAlg(const Interaction& interaction) const;
 
   /// Map specifying the managed cross section algorithms. Keys are strings
   /// generated with Interaction::AsString() (identical to those used for

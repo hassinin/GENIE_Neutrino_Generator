@@ -46,6 +46,12 @@ public:
   void   Configure  (const Registry & config);
   void   Configure  (string param_set);
 
+  // Resolved coefficients include the normalization and Q4 constraints.
+  // Read-only export for the optional device evaluator.
+  const std::vector<double>& GpuCoefficients() const { return fZ_An; }
+  double GpuT0() const { return fT0; }
+  double GpuTcut() const { return fTcut; }
+
 private:
 
   // calculate z parameter used in expansion

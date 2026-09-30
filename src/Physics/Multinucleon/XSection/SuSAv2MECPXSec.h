@@ -59,13 +59,21 @@ public:
   double PairRatio(const Interaction* i,
     const std::string& final_state_ratio = "pnFraction") const;
 
+  // Calculate Qvalue Shift for susa:
+  double Qvalue(const Interaction & interaction ) const ;
+
+  // Calculate overall scaling factor:
+  double ScalingFactor(const Interaction & interaction ) const ;
+  // A kinematics-dependent scale must remain inside the CPU integrand/sampler.
+  bool SupportsGpuTensor() const { return !fMECScaleAlg; }
+
+  // Access hadron tensor model
+  const genie::HadronTensorModelI* HadronTensorModel() const { return fHadronTensorModel; }
+
 private:
 
   /// Load algorithm configuration
   void LoadConfig (void);
-
-  // Calculate Qvalue Shift for susa:
-  double Qvalue(const Interaction & interaction ) const ;
 
   /// External scaling factor for this cross section
   double fXSecCCScale;

@@ -29,6 +29,10 @@
 #include "Framework/Numerical/BLI2DNonUnifObjectGrid.h"
 #include "Physics/HadronTensors/LabFrameHadronTensorI.h"
 
+namespace gpuspline {
+  class GpuHadronTensor;
+}
+
 namespace genie {
 
 class TabulatedLabFrameHadronTensor : public LabFrameHadronTensorI {
@@ -37,6 +41,36 @@ class TabulatedLabFrameHadronTensor : public LabFrameHadronTensorI {
 
   TabulatedLabFrameHadronTensor(const std::string& table_file_name);
   virtual ~TabulatedLabFrameHadronTensor();
+
+  /// True if GENIE was built with GPU support (./configure --enable-gpu) and a
+  /// usable GPU is enabled for this job. Callers gate their GPU branches on it.
+  static bool GpuEnabled();
+
+  bool HasGpuTensor() const;
+  bool InitGpuTensor() const;
+  const gpuspline::GpuHadronTensor* GetGpuTensor() const { return fGpuTensor; }
+
+  /// GPU-accelerated rejection sampling for lepton kinematics
+  double EstimateSamplingBoundGPU(
+    int probe_pdg, double E_probe, double m_probe, double ml,
+    double Q_value, double Tmin, double Tmax, double costh_min, double costh_max,
+    bool use_rosenbluth, double Q3Max, double Q2min) const;
+
+  bool SampleKinematicsGPU(
+    int probe_pdg, double E_probe, double m_probe, double ml,
+    double Q_value, double Tmin, double Tmax, double costh_min, double costh_max,
+    double xsec_max, bool use_rosenbluth,
+    double& out_Tl, double& out_ctl, double& out_xsec,
+    double Q3Max, double Q2min) const;
+
+  /// GPU-accelerated 2D numerical quadrature for total cross section
+  // Refine within max_evals; false requests CPU fallback if not converged.
+  bool IntegrateGPU(
+    int probe_pdg, double E_probe, double m_probe, double ml,
+    double Delta_Q_value, double Tmin, double Tmax, double costh_min, double costh_max,
+    double Q3Max, double Q2min, bool use_rosenbluth, double Vud,
+    double& out_total_xsec, double relative_tolerance = 0.0005,
+    unsigned int max_evals = 200000) const;
 
   // \todo Enable override specifiers when GENIE modernizes to C++11
 
@@ -205,6 +239,8 @@ class TabulatedLabFrameHadronTensor : public LabFrameHadronTensorI {
   std::vector<TableEntry> fEntries;
 
   BLI2DNonUnifObjectGrid<TableEntry> fGrid;
+
+  mutable gpuspline::GpuHadronTensor* fGpuTensor; //! Pointer to GPU accelerated hadron tensor
 
 }; // class TabulatedLabFrameHadronTensor
 

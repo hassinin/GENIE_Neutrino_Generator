@@ -50,6 +50,12 @@ public:
   double Integral(const Interaction* i) const;
   bool   ValidProcess(const Interaction* i) const;
 
+  // Hadron tensor and model accessors
+  const HadronTensorModelI* HadronTensorModel() const { return fHadronTensorModel; }
+  bool   IsSuSAv2() const;
+  double Qvalue(const Interaction & interaction) const;
+  double ScalingFactor(const Interaction & interaction) const;
+
   // override the Algorithm::Configure methods to load configuration
   // data to private data members
   void Configure (const Registry & config);

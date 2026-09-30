@@ -156,6 +156,13 @@ if(@nret>0)
       { print GBLD   "#define __GENIE_PROFESSOR2_ENABLED__\n"; }
 else  { print GBLD "//#define __GENIE_PROFESSOR2_ENABLED__\n"; }
 
+# GPU acceleration (bundled gpu_spline library) enabled?
+#
+@nret = `grep 'GOPT_ENABLE_GPU=YES' $GCONF_FILE`;
+if(@nret>0)
+      { print GBLD   "#define __GENIE_GPU_ENABLED__\n"; }
+else  { print GBLD "//#define __GENIE_GPU_ENABLED__\n"; }
+
 # grab libxml2 version information
 #
 $libxml2_inc = "";

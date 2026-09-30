@@ -47,9 +47,29 @@ GENIE_BIN_INSTALLATION_PATH     := $(GENIE_INSTALLATION_PATH)/bin
 GENIE_INCBASE_INSTALLATION_PATH := $(GENIE_INSTALLATION_PATH)/include
 GENIE_INC_INSTALLATION_PATH     := $(GENIE_INCBASE_INSTALLATION_PATH)/GENIE
 
+# Optional GPU acceleration (./configure --enable-gpu): include and link flags
+# for packages that call into the bundled gpu_spline library. Both are empty
+# when GPU support is disabled, so GENIE then needs neither CUDA nor ROCm.
+#
+GPUSPLINE_INCLUDES :=
+GPUSPLINE_LIBS     :=
+ifeq ($(strip $(GOPT_ENABLE_GPU)),YES)
+ifeq ($(strip $(GOPT_WITH_GPU_BACKEND)),hip)
+GENIE_ROCM_PATH ?= $(GOPT_WITH_ROCM_PATH)
+GPUSPLINE_INCLUDES := -DUSE_HIP -D__HIP_PLATFORM_AMD__ -I$(GENIE)/gpu_spline/include -I$(GENIE_ROCM_PATH)/include
+GPUSPLINE_LIBS     := -L$(GENIE)/gpu_spline/lib -lgpuspline -L$(GENIE_ROCM_PATH)/lib -lamdhip64 \
+                      -Wl,-rpath,$(GENIE)/gpu_spline/lib -Wl,-rpath,$(GENIE_ROCM_PATH)/lib
+else
+GENIE_CUDA_PATH ?= $(GOPT_WITH_CUDA_PATH)
+GPUSPLINE_INCLUDES := -I$(GENIE)/gpu_spline/include -I$(GENIE_CUDA_PATH)/include
+GPUSPLINE_LIBS     := -L$(GENIE)/gpu_spline/lib -lgpuspline -L$(GENIE_CUDA_PATH)/lib64 -lcudart \
+                      -Wl,-rpath,$(GENIE)/gpu_spline/lib -Wl,-rpath,$(GENIE_CUDA_PATH)/lib64
+endif
+endif
+
 # GENIE header files base dir
 #
-GENIE_INCLUDES := -I$(GENIE)/src/
+GENIE_INCLUDES := -I$(GENIE)/src/ $(GPUSPLINE_INCLUDES)
 
 # The following will be appended in the library name
 #

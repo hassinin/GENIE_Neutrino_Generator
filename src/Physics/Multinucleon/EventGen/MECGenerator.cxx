@@ -33,6 +33,8 @@
 #include "Physics/Multinucleon/XSection/MECUtils.h"
 #include "Physics/Multinucleon/XSection/SuSAv2MECPXSec.h"
 #include "Physics/Multinucleon/XSection/MartiniEricsonChanfrayMarteauMECPXSec2024.h"
+#include "Physics/Multinucleon/XSection/NievesSimoVacasMECPXSec2016.h"
+#include "Physics/HadronTensors/TabulatedLabFrameHadronTensor.h"
 
 #include "Physics/NuclearState/NuclearModelI.h"
 //#include "Physics/Multinucleon/XSection/MECHadronTensor.h"
@@ -669,6 +671,84 @@ void MECGenerator::SelectNSVLeptonKinematics (GHepRecord * event) const
   bool accept = false;
   unsigned int iter = 0;
 
+  // Attempt GPU-accelerated rejection sampling if GPU is enabled
+  if ( TabulatedLabFrameHadronTensor::GpuEnabled() ) {
+    const NievesSimoVacasMECPXSec2016* nsv = dynamic_cast<const NievesSimoVacasMECPXSec2016*>(fXSecModel);
+    if (nsv && nsv->SupportsGpuTensor() && nsv->HadronTensorModel()) {
+      int tensor_pdg = TgtPDG;
+      const TabulatedLabFrameHadronTensor* tensor = dynamic_cast<const TabulatedLabFrameHadronTensor*>(
+          nsv->HadronTensorModel()->GetTensor(tensor_pdg, kHT_MEC_FullAll));
+      // Substitute nuclei require distinct pn and nn/pp scaling. Let the
+      // CPU model perform that contraction and rejection sampling.
+      if (tensor && tensor->HasGpuTensor()) {
+        double Q_value = genie::utils::mec::Qvalue(TgtPDG, NuPDG);
+        double out_Tl = 0.0, out_ctl = 0.0, out_xsec = 0.0;
+        const double scale = nsv->TensorScale(*interaction);
+        bool gpu_ok = scale > 0.0 && tensor->SampleKinematicsGPU(
+            NuPDG, Enu, interaction->InitState().Probe()->Mass(), LepMass,
+            Q_value, TMin, TMax, CosthMin, CosthMax,
+            XSecMax / scale, false /* use_rosenbluth = false for Valencia */,
+            out_Tl, out_ctl, out_xsec, fQ3Max, 0.0);
+        if (gpu_ok) {
+          T = out_Tl;
+          Costh = out_ctl;
+          genie::utils::mec::Getq0q3FromTlCostl(T, Costh, Enu, LepMass, Q0, Q3);
+          if (Q3 <= fQ3Max) {
+            Plep = TMath::Sqrt( T * (T + (2.0 * LepMass)));
+            kinematics->SetKV(kKVTl, T);
+            kinematics->SetKV(kKVctl, Costh);
+            kinematics->SetKV(kKVQ0, Q0);
+            kinematics->SetKV(kKVQ3, Q3);
+            accept = true;
+
+            // Evaluate the 4 cross sections at this chosen point to determine initial nucleons
+            if (NuPDG > 0) {
+              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNN);
+            } else {
+              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterPP);
+            }
+            double XSec = fXSecModel->XSec(interaction, kPSTlctl);
+            interaction->ExclTagPtr()->SetResonance(genie::kP33_1232);
+            double XSecDelta = fXSecModel->XSec(interaction, kPSTlctl);
+            interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNP);
+            double XSecDeltaPN = fXSecModel->XSec(interaction, kPSTlctl);
+            interaction->ExclTagPtr()->SetResonance(genie::kNoResonance);
+            double XSecPN = fXSecModel->XSec(interaction, kPSTlctl);
+
+            bool isPDD = false;
+            double myrand = rnd->RndKine().Rndm();
+            double pnFraction = (XSec > 0.0) ? (XSecPN / XSec) : 0.0;
+
+            if (myrand <= pnFraction) {
+              event->AddParticle(kPdgClusterNP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNP);
+              if (XSecPN > 0.0 && rnd->RndKine().Rndm() <= XSecDeltaPN / XSecPN) {
+                isPDD = true;
+              }
+            } else {
+              if (NuPDG > 0) {
+                event->AddParticle(kPdgClusterNN, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+                interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterNN);
+              } else {
+                event->AddParticle(kPdgClusterPP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+                interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg(kPdgClusterPP);
+              }
+              if ((XSec - XSecPN) > 0.0 && rnd->RndKine().Rndm() <= (XSecDelta - XSecDeltaPN) / (XSec - XSecPN)) {
+                isPDD = true;
+              }
+            }
+            if (isPDD) {
+              interaction->ExclTagPtr()->SetResonance(genie::kP33_1232);
+            } else {
+              interaction->ExclTagPtr()->SetResonance(genie::kNoResonance);
+            }
+            LOG("MEC", pINFO) << "[GPU Nieves MEC] Sampled: T=" << T << ", Costh=" << Costh << ", XSec=" << XSec;
+          }
+        }
+      }
+    }
+  }
+
   // loop over different (randomly) selected T and Costh
   while (!accept) {
       iter++;
@@ -944,6 +1024,78 @@ void MECGenerator::SelectSuSALeptonKinematics(GHepRecord* event) const
   // Scan the accessible phase space to find the maximum differential cross
   // section to throw against
   double XSecMax = utils::mec::GetMaxXSecTlctl( *fXSecModel, *interaction );
+
+  // Attempt GPU-accelerated rejection sampling if GPU is enabled
+  if ( TabulatedLabFrameHadronTensor::GpuEnabled() ) {
+    const SuSAv2MECPXSec* susa = dynamic_cast<const SuSAv2MECPXSec*>(fXSecModel);
+    if (susa && susa->SupportsGpuTensor() && susa->HadronTensorModel()) {
+      int tensor_pdg = kPdgTgtC12;
+      const HadronTensorType_t tensor_type = interaction->ProcInfo().IsEM() ? kHT_MEC_EM : kHT_MEC_FullAll;
+      const TabulatedLabFrameHadronTensor* tensor = dynamic_cast<const TabulatedLabFrameHadronTensor*>(
+          susa->HadronTensorModel()->GetTensor(tensor_pdg, tensor_type));
+      if (tensor && tensor->HasGpuTensor()) {
+        double Delta_Q_value = susa->Qvalue(*interaction);
+        double out_Tl = 0.0, out_ctl = 0.0, out_xsec = 0.0;
+        const double scale = susa->ScalingFactor(*interaction);
+        // The model's local peak search can miss a separate narrow ridge.
+        // Construct the GPU envelope deterministically over the tensor grid
+        // before drawing proposals; never repair a bound after a random hit.
+        const double table_bound = scale > 0.0 ? tensor->EstimateSamplingBoundGPU(
+            NuPDG, Enu, interaction->InitState().Probe()->Mass(), LepMass,
+            Delta_Q_value, TMin, TMax, CosthMin, CosthMax, true, fQ3Max, Q2min) : 0.0;
+        bool gpu_ok = scale > 0.0 && tensor->SampleKinematicsGPU(
+            NuPDG, Enu, interaction->InitState().Probe()->Mass(), LepMass,
+            Delta_Q_value, TMin, TMax, CosthMin, CosthMax,
+            std::max(XSecMax / scale, table_bound), true /* use_rosenbluth = true */,
+            out_Tl, out_ctl, out_xsec, fQ3Max, Q2min);
+        if (gpu_ok) {
+          T = out_Tl;
+          Costh = out_ctl;
+          Plep = TMath::Sqrt( T * (T + (2.0 * LepMass)));
+          Q3 = TMath::Sqrt(Plep*Plep + Enu*Enu - 2.0 * Plep * Enu * Costh);
+          Q0 = Enu - (T + LepMass);
+          Q2 = Q3*Q3 - Q0*Q0;
+          if ( Q3 < fQ3Max && Q2 >= Q2min ) {
+            kinematics->SetKV(kKVTl, T);
+            kinematics->SetKV(kKVctl, Costh);
+            accept = true;
+
+            // Choose isospin of initial hit nucleon pair
+            double myrand_pn = rnd->RndKine().Rndm();
+            double pnFraction = susa->PairRatio( interaction );
+            double myrand_pp = rnd->RndKine().Rndm();
+            double ppFraction = 0;
+            if ( interaction->ProcInfo().IsEM() ) {
+              ppFraction = susa->PairRatio( interaction, "ppFraction" );
+            }
+            if ( myrand_pn <= pnFraction ) {
+              event->AddParticle(kPdgClusterNP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+              interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg( kPdgClusterNP );
+            } else {
+              if ( interaction->ProcInfo().IsEM() ) {
+                if ( myrand_pp <= ppFraction / (1. - pnFraction) ) {
+                  event->AddParticle(kPdgClusterPP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+                  interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg( kPdgClusterPP );
+                } else {
+                  event->AddParticle(kPdgClusterNN, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+                  interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg( kPdgClusterNN );
+                }
+              } else {
+                if ( NuPDG > 0 ) {
+                  event->AddParticle(kPdgClusterNN, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+                  interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg( kPdgClusterNN );
+                } else {
+                  event->AddParticle(kPdgClusterPP, kIStNucleonTarget, 1, -1, -1, -1, tempp4, v4);
+                  interaction->InitStatePtr()->TgtPtr()->SetHitNucPdg( kPdgClusterPP );
+                }
+              }
+            }
+            LOG("MEC", pINFO) << "[GPU SuSAv2 MEC] Sampled: T=" << T << ", Costh=" << Costh << ", pnFraction=" << pnFraction;
+          }
+        }
+      }
+    }
+  }
 
   // loop over different (randomly) selected T and Costh
   while ( !accept ) {

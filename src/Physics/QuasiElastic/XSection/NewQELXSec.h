@@ -98,6 +98,9 @@ private:
   // of initial nucleons. This approach is needed to create total cross section
   // splines.
   bool fAverageOverNucleons;
+  bool fUseGpuIntegration;
+  bool fUseGpuAdaptiveIntegration;
+  unsigned int fGpuAdaptiveMaxEval;
 };
 
 

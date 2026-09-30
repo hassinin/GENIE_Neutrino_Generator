@@ -69,6 +69,11 @@ public :
   void SaveFluxProbabilities       (string outfilename);
   void Configure                   (bool calc_prob_scales = true);
 
+  // configure GPU pre-selection
+  void UseGpuPreselection          (bool use_gpu = true);
+  bool IsUsingGpuPreselection      (void) const { return fUseGpuPreselection; }
+  void SetGpuDeviceId              (int device_id) { fGpuDeviceId = device_id; }
+
   // generate single neutrino event for input flux & geometry
   EventRecord * GenerateEvent (void);
 
@@ -88,6 +93,7 @@ private:
   // private methods:
   void          InitJob                         (void);
   void          InitEventGeneration             (void);
+  void          InitGpuPreselection             (void);
   void          GetParticleLists                (void);
   void          GetMaxPathLengthList            (void);
   void          GetMaxFluxEnergy                (void);
@@ -146,6 +152,14 @@ private:
   string          fFluxIntFileName;    ///< whether to save pre-generated flux tree for use in later jobs
   string          fFluxIntTreeName;    ///< name for tree holding flux probabilities
   map<int, double> fSumFluxIntProbs;   ///< map where the key is flux pdg code and the value is sum of fBrFluxWeight * fBrFluxIntProb for all these flux neutrinos
+
+  bool            fUseGpuPreselection; ///< [config] use GPU for flux pre-selection
+  int             fGpuDeviceId;        ///< [config] GPU device ID
+  bool            fGpuPreselectorInit; ///< [state] whether GPU preselector was initialized
+  void *          fGpuSplineEngine;    //! [internal] GPU spline engine pointer
+  void *          fGpuPreselector;     //! [internal] GPU flux preselector pointer
+  void *          fGpuProxyFlux;       //! [internal] GPU proxy flux driver pointer
+  GFluxI *        fActualFluxDriver;   //! [internal] underlying flux driver pointer
 };
 
 }      // genie namespace

@@ -55,6 +55,12 @@ public:
   void Configure (const Registry & config);
   void Configure (string config);
 
+  // Access hadron tensor model
+  const HadronTensorModelI* HadronTensorModel() const { return fHadronTensorModel; }
+  // Raw GPU tensors cannot apply these optional model corrections.
+  bool SupportsGpuTensor() const { return !fMECScaleAlg && !fQvalueShifter; }
+  double TensorScale(const Interaction& interaction) const;
+
 private:
 
   // Load algorithm configuration

@@ -62,6 +62,13 @@ public:
   void Configure (const Registry & config);
   void Configure (string param_set);
 
+  // Optional GPU adapter; these do not alter the native CPU calculation.
+  bool SupportsGpuNoRPA() const {
+    return !fRPA && !fQvalueShifter && !fCompareNievesTensors;
+  }
+  void GpuNuclearInputs(const Target& target, double& potential,
+                        double& kf1, double& kf2) const;
+
 private:
   void LoadConfig (void);
 

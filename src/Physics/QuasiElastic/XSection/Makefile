@@ -15,10 +15,17 @@ PACKAGE           = Physics/QuasiElastic/XSection
 PACKAGE_ABBREV    = PhQELXS
 DICTIONARY        = _ROOT_DICT_$(PACKAGE_ABBREV)
 LIBNAME           = libG$(PACKAGE_ABBREV)
-EXTRA_EXT_LIBS    =
+EXTRA_EXT_LIBS    = $(GPUSPLINE_LIBS)
 
 all     : rootcint lib lib-link
 install : install-inc install-lib
+
+# Rebuild when ./configure changes GPU support. QELGpuUtils is a .cpp file so
+# rootcling never parses its header (which pulls in the GPU toolkit headers).
+NewQELXSec.o QELGpuUtils.o: $(GENIE)/src/make/Make.config QELGpuUtils.h \
+  $(wildcard $(GENIE)/gpu_spline/include/gpu_spline/*.h)
+QELGpuUtils.o: QELGpuUtils.cpp
+	$(CXX) -c $(CXXFLAGS) $(CPPFLAGS) $< -o $@
 
 # Include standard package makefile targets
 #

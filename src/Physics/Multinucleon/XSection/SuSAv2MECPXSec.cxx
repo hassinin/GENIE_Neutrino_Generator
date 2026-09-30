@@ -398,6 +398,33 @@ double SuSAv2MECPXSec::Qvalue(const Interaction & interaction ) const
   return Delta_Q_value ;
 }
 //_________________________________________________________________________
+double SuSAv2MECPXSec::ScalingFactor(const Interaction& interaction) const
+{
+  int target_pdg = interaction.InitState().Tgt().Pdg();
+  int tensor_pdg = kPdgTgtC12;
+  int A_request = pdg::IonPdgCodeToA(target_pdg);
+  bool need_to_scale = (target_pdg != tensor_pdg);
+
+  double scaleFact = 1.0;
+  if ( need_to_scale ) {
+    FermiMomentumTablePool * kftp = FermiMomentumTablePool::Instance();
+    const FermiMomentumTable * kft = kftp->GetTable(fKFTable);
+    double KF_tgt = kft->FindClosestKF(target_pdg, kPdgProton);
+    double KF_ten = kft->FindClosestKF(tensor_pdg, kPdgProton);
+    double A_ten  = pdg::IonPdgCodeToA(tensor_pdg);
+    scaleFact = (A_request/A_ten)*(KF_tgt/KF_ten)*(KF_tgt/KF_ten);
+  }
+
+  const ProcessInfo& proc_info = interaction.ProcInfo();
+  if( proc_info.IsWeakCC() ) scaleFact *= fXSecCCScale;
+  else if( proc_info.IsWeakNC() ) scaleFact *= fXSecNCScale;
+  else if( proc_info.IsEM() ) scaleFact *= fXSecEMScale;
+
+  if( fMECScaleAlg ) scaleFact *= fMECScaleAlg->GetScaling(interaction);
+
+  return scaleFact;
+}
+//_________________________________________________________________________
 void SuSAv2MECPXSec::Configure(const Registry& config)
 {
   Algorithm::Configure(config);

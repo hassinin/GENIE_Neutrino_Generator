@@ -415,3 +415,11 @@ void NievesSimoVacasMECPXSec2016::LoadConfig(void)
   }
 
 }
+
+// Overall normalization for the unmodified hadron tensor.
+double NievesSimoVacasMECPXSec2016::TensorScale(const Interaction& interaction) const
+{
+  if (interaction.ProcInfo().IsWeakCC()) return fXSecCCScale;
+  if (interaction.ProcInfo().IsWeakNC()) return fXSecNCScale;
+  return 1.0;
+}

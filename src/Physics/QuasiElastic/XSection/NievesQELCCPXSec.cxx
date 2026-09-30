@@ -1322,3 +1322,22 @@ void NievesQELCCPXSec::CompareNievesTensors(const Interaction* in)
   return;
 } // END TESTING CODE
 //____________________________________________________________________________
+
+// Read-only inputs for the optional NoRPA GPU evaluator. Keep the native
+// Coulomb quadrature and the Fermi-momentum convention used by CNCTCLimUcalc.
+void genie::NievesQELCCPXSec::GpuNuclearInputs(const Target& target,
+  double& potential, double& kf1, double& kf2) const
+{
+  potential = fCoulomb ? vcr(&target, target.HitNucPosition()) : 0.;
+  kf1 = kf2 = 0.;
+  if (!target.IsNucleus()) return;
+  const bool proton = pdg::IsProton(target.HitNucPdg());
+  if (fLFG) {
+    const double density = nuclear::Density(target.HitNucPosition(),target.A());
+    kf1 = TMath::Power(3*constants::kPi2*density*(proton?target.Z():target.N()),1./3.)*fhbarc;
+    kf2 = TMath::Power(3*constants::kPi2*density*(proton?target.N():target.Z()),1./3.)*fhbarc;
+  } else {
+    kf1 = fKFTable->FindClosestKF(target.Pdg(),proton?kPdgProton:kPdgNeutron);
+    kf2 = fKFTable->FindClosestKF(target.Pdg(),proton?kPdgNeutron:kPdgProton);
+  }
+}

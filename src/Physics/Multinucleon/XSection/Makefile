@@ -16,10 +16,13 @@ PACKAGE           = Physics/Multinucleon/XSection
 PACKAGE_ABBREV    = PhMNucXS
 DICTIONARY        = _ROOT_DICT_$(PACKAGE_ABBREV)
 LIBNAME           = libG$(PACKAGE_ABBREV)
-EXTRA_EXT_LIBS    = $(XML_LIBRARIES) -L$(GENIE_LIB_PATH) -lGPhXSIg -lGFwEG -lGFwGHEP -lGPhCmn -lGFwUtl -lGPhHadTens
+EXTRA_EXT_LIBS    = $(XML_LIBRARIES) -L$(GENIE_LIB_PATH) -lGPhXSIg -lGFwEG -lGFwGHEP -lGPhCmn -lGFwUtl -lGPhHadTens -lGPhQELXS $(GPUSPLINE_LIBS)
 
 all     : rootcint lib lib-link
 install : install-inc install-lib
+
+# Rebuild when ./configure changes GPU support (see TabulatedLabFrameHadronTensor::GpuEnabled).
+MECXSec.o: $(GENIE)/src/make/Make.config
 
 # Include standard package makefile targets
 #

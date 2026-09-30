@@ -16,7 +16,7 @@ GENIE_LIBS  = $(shell $(GENIE)/src/scripts/setup/genie-config --libs)
 
 # Mac OS X -bind_at_load means we must list the low level libraries
 # first, and each stage must fully resolved before the next library
-LIBRARIES  := $(LIBRARIES) $(GENIE_LIBS)
+LIBRARIES  := $(LIBRARIES) $(GENIE_LIBS) $(GPUSPLINE_LIBS)
 #LIBRARIES  := $(LIBRARIES) $(CERN_LIBRARIES) $(GENIE_LIBS)
 
 TGT_BASE =  gevgen             \
@@ -101,6 +101,9 @@ all: $(TGT)
 $(GENIE_BIN_PATH)/gevmerge: gEvMerge.o $(call find_libs,gevmerge)
 	@echo "** Building gevmerge"
 	$(LD) $(LDFLAGS) gEvMerge.o $(LIBRARIES) -o $(GENIE_BIN_PATH)/gevmerge
+# --use-gpu handling is compiled in or out depending on ./configure --enable-gpu.
+gEvGen.o gMakeSplines.o: $(GENIE)/src/make/Make.config
+
 
 # a simple/generic gevgen event generation app
 #

@@ -3,6 +3,7 @@
 #include <fstream>
 
 // GENIE includes
+#include "Framework/Conventions/GBuild.h"
 #include "Framework/Conventions/Constants.h"
 #include "Framework/Conventions/Units.h"
 #include "Framework/ParticleData/PDGCodes.h"
@@ -12,6 +13,26 @@
 // For retrieval of CKM-Vud
 #include "Framework/Algorithm/AlgConfigPool.h"
 #include "Framework/Registry/Registry.h"
+#include "Framework/Numerical/RandomGen.h"
+#ifdef __GENIE_GPU_ENABLED__
+#include "gpu_spline/gpu_hadron_tensor.h"
+#include "gpu_spline/gpu_status.h"
+
+namespace genie {
+namespace {
+// A device error disables every GPU path for the rest of the job; callers then
+// take their CPU branch. Only the first report is logged.
+void ReportGpuDeviceError(const gpu_spline::GpuDeviceError& e, const char* where)
+{
+  if (gpu_spline::DisableGpu(e.what())) {
+    LOG("TabulatedLabFrameHadronTensor", pERROR)
+      << "[GPU] CUDA error in " << where << ": " << e.what()
+      << ". Disabling the GPU for the rest of this job; continuing on the CPU.";
+  }
+}
+}
+}
+#endif // __GENIE_GPU_ENABLED__
 
 namespace {
   /// Enumerated type that represents the format used to read in
@@ -35,7 +56,7 @@ namespace {
 
 genie::TabulatedLabFrameHadronTensor::TabulatedLabFrameHadronTensor(
   const std::string& table_file_name)
-  : fGrid(&fq0Points, &fqmagPoints, &fEntries)
+  : fGrid(&fq0Points, &fqmagPoints, &fEntries), fGpuTensor(nullptr)
 {
   // Read in the table
   std::ifstream in_file( table_file_name.c_str() );
@@ -101,7 +122,227 @@ genie::TabulatedLabFrameHadronTensor::TabulatedLabFrameHadronTensor(
 
 genie::TabulatedLabFrameHadronTensor::~TabulatedLabFrameHadronTensor()
 {
+#ifdef __GENIE_GPU_ENABLED__
+  if (fGpuTensor) {
+    delete fGpuTensor;
+    fGpuTensor = nullptr;
+  }
+#endif
 }
+
+bool genie::TabulatedLabFrameHadronTensor::GpuEnabled()
+{
+#ifdef __GENIE_GPU_ENABLED__
+  return gpuspline::GpuHadronTensor::IsGpuEnabled();
+#else
+  return false;
+#endif
+}
+
+#ifdef __GENIE_GPU_ENABLED__
+bool genie::TabulatedLabFrameHadronTensor::InitGpuTensor() const
+{
+  if (fGpuTensor && fGpuTensor->IsOnDevice()) return true;
+  if (!gpuspline::GpuHadronTensor::IsGpuEnabled()) return false;
+  if (fEntries.empty() || fq0Points.empty() || fqmagPoints.empty()) return false;
+
+  try {
+    if (!fGpuTensor) {
+      fGpuTensor = new gpuspline::GpuHadronTensor(gpuspline::GpuHadronTensor::DefaultDevice());
+    }
+    std::vector<gpuspline::GpuHadronTensorEntry> gpu_entries;
+    gpu_entries.reserve(fEntries.size());
+    for (size_t i = 0; i < fEntries.size(); ++i) {
+      const TableEntry& e = fEntries[i];
+      gpu_entries.emplace_back(e.W00, e.ReW0z, e.Wxx, e.ImWxy, e.Wzz);
+    }
+
+    int Z = genie::pdg::IonPdgCodeToZ(fTargetPDG);
+    int A = genie::pdg::IonPdgCodeToA(fTargetPDG);
+
+    if (!fGpuTensor->Ingest(Z, A, fq0Points, fqmagPoints, gpu_entries)) {
+      delete fGpuTensor;
+      fGpuTensor = nullptr;
+      return false;
+    }
+    if (!fGpuTensor->UploadToDevice()) {
+      delete fGpuTensor;
+      fGpuTensor = nullptr;
+      return false;
+    }
+    LOG("TabulatedLabFrameHadronTensor", pNOTICE)
+      << "Successfully ingested and uploaded hadron tensor (target " << fTargetPDG << ") onto GPU.";
+    return true;
+  } catch (...) {
+    if (fGpuTensor) {
+      delete fGpuTensor;
+      fGpuTensor = nullptr;
+    }
+    return false;
+  }
+}
+
+bool genie::TabulatedLabFrameHadronTensor::HasGpuTensor() const
+{
+  if (!gpuspline::GpuHadronTensor::IsGpuEnabled()) return false;
+  if (!fGpuTensor || !fGpuTensor->IsOnDevice()) {
+    InitGpuTensor();
+  }
+  return (fGpuTensor != nullptr && fGpuTensor->IsOnDevice());
+}
+
+double genie::TabulatedLabFrameHadronTensor::EstimateSamplingBoundGPU(
+  int probe_pdg, double E_probe, double m_probe, double ml,
+  double Q_value, double Tmin, double Tmax, double costh_min, double costh_max,
+  bool use_rosenbluth, double Q3Max, double Q2min) const
+{
+  if (!HasGpuTensor()) return 0.0;
+  double Vud = 0.97427;
+  if (use_rosenbluth) {
+    const genie::Registry* reg = genie::AlgConfigPool::Instance()->CommonList("Param", "CKM");
+    if (reg) Vud = reg->GetDouble("CKM-Vud");
+  }
+  try {
+    return fGpuTensor->FindMaxXSecOnTableGPU(probe_pdg,E_probe,m_probe,ml,
+        Tmin,Tmax,costh_min,costh_max,Q_value,use_rosenbluth,Vud,Q3Max,Q2min);
+  } catch (const gpu_spline::GpuDeviceError& e) {
+    ReportGpuDeviceError(e, "sampling-bound estimate");
+    return 0.0;
+  }
+}
+
+bool genie::TabulatedLabFrameHadronTensor::SampleKinematicsGPU(
+  int probe_pdg, double E_probe, double m_probe, double ml,
+  double Q_value, double Tmin, double Tmax, double costh_min, double costh_max,
+  double xsec_max, bool use_rosenbluth,
+  double& out_Tl, double& out_ctl, double& out_xsec,
+    double Q3Max, double Q2min) const
+{
+  if (!HasGpuTensor()) return false;
+
+  double Vud = 0.97427;
+  if (use_rosenbluth) {
+    const genie::Registry* temp_reg = genie::AlgConfigPool::Instance()
+      ->CommonList("Param", "CKM");
+    if (temp_reg) {
+      Vud = temp_reg->GetDouble("CKM-Vud");
+    }
+  }
+
+  if (!(xsec_max > 0.0) || !std::isfinite(xsec_max)) return false;
+
+  // Draw from GENIE's seeded stream, never from process timing.
+  auto& rng = genie::RandomGen::Instance()->RndKine();
+  const auto seed_hi = static_cast<unsigned long long>(rng.Rndm() * 4294967296.0);
+  const auto seed_lo = static_cast<unsigned long long>(rng.Rndm() * 4294967296.0);
+  const unsigned long long seed = (seed_hi << 32) | seed_lo;
+
+  // A bound violation is a physics guard (plain std::runtime_error) and is
+  // deliberately not caught here. Falling back after the two seed draws above
+  // is unbiased: no GPU output is used and the CPU loop draws fresh numbers.
+  gpuspline::MecKinematicsCandidate cand;
+  bool ok = false;
+  try {
+    ok = fGpuTensor->SampleKinematicsGPU(
+      probe_pdg, E_probe, m_probe, ml,
+      Tmin, Tmax, costh_min, costh_max,
+      Q_value, xsec_max, use_rosenbluth,
+      Vud, seed, cand, 4096, Q3Max, Q2min);
+  } catch (const gpu_spline::GpuDeviceError& e) {
+    ReportGpuDeviceError(e, "kinematics sampling");
+    return false;
+  }
+
+  if (ok && cand.accepted) {
+    out_Tl = cand.Tl;
+    out_ctl = cand.cos_l;
+    out_xsec = cand.xsec;
+    return true;
+  }
+
+  return false;
+}
+
+bool genie::TabulatedLabFrameHadronTensor::IntegrateGPU(
+  int probe_pdg, double E_probe, double m_probe, double ml,
+  double Delta_Q_value, double Tmin, double Tmax, double costh_min, double costh_max,
+  double Q3Max, double Q2min, bool use_rosenbluth, double Vud,
+  double& out_total_xsec, double relative_tolerance,
+  unsigned int max_evals) const
+{
+  out_total_xsec = 0.;
+  if (!HasGpuTensor() || !std::isfinite(relative_tolerance) ||
+      relative_tolerance <= 0.) return false;
+  if (Tmax <= Tmin || costh_max <= costh_min) return true;
+
+  // Tensor boundaries and Q2/Q3 cuts are discontinuous: do not use Simpson's
+  // smooth-function Richardson factor to understate the integration error.
+  // Require two successive refinements to agree, using the configured budget.
+  double previous = 0.;
+  unsigned int used = 0;
+  int stable = 0;
+  for (int n = 33; n <= 32767; n = 2 * n - 1) {
+    const unsigned int evaluations = static_cast<unsigned int>(n) * n;
+    if (evaluations > max_evals - used) break;
+    double current = 0.;
+    bool ok = false;
+    try {
+      ok = fGpuTensor->Integrate2DGPU(
+          probe_pdg, E_probe, m_probe, ml,
+          Delta_Q_value, Tmin, Tmax, costh_min, costh_max,
+          Q3Max, Q2min, use_rosenbluth, Vud, current, n, n);
+    } catch (const gpu_spline::GpuDeviceError& e) {
+      ReportGpuDeviceError(e, "tensor integration");
+      out_total_xsec = 0.;
+      return false;
+    }
+    if (!ok || !std::isfinite(current) || current < 0.) return false;
+    used += evaluations;
+    // All-zero coarse grids can miss a narrow region of support entirely.
+    if (n > 33 && current > 0. &&
+        std::abs(current - previous) <= 0.5 * relative_tolerance * current) {
+      if (++stable == 2) {
+        out_total_xsec = current;
+        return true;
+      }
+    } else {
+      stable = 0;
+    }
+    previous = current;
+  }
+  // MECXSec continues with its configured CPU integrator on failure.
+  return false;
+}
+
+#else
+// Built without GPU support: callers see "no GPU" and take their CPU branch.
+bool genie::TabulatedLabFrameHadronTensor::InitGpuTensor() const { return false; }
+
+bool genie::TabulatedLabFrameHadronTensor::HasGpuTensor() const { return false; }
+
+double genie::TabulatedLabFrameHadronTensor::EstimateSamplingBoundGPU(
+  int, double, double, double, double, double, double, double, double,
+  bool, double, double) const
+{
+  return 0.0;
+}
+
+bool genie::TabulatedLabFrameHadronTensor::SampleKinematicsGPU(
+  int, double, double, double, double, double, double, double, double,
+  double, bool, double&, double&, double&, double, double) const
+{
+  return false;
+}
+
+bool genie::TabulatedLabFrameHadronTensor::IntegrateGPU(
+  int, double, double, double, double, double, double, double, double,
+  double, double, bool, double, double& out_total_xsec, double,
+  unsigned int) const
+{
+  out_total_xsec = 0.;
+  return false;
+}
+#endif // __GENIE_GPU_ENABLED__
 
 std::complex<double> genie::TabulatedLabFrameHadronTensor::tt(
   double q0, double q_mag) const

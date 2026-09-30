@@ -7,6 +7,7 @@
 //____________________________________________________________________________
 
 #include <TMath.h>
+#include <limits>
 #include <Math/IFunction.h>
 #include <Math/IntegratorMultiDim.h>
 #include "Math/AdaptiveIntegratorMultiDim.h"
@@ -31,6 +32,12 @@
 #include "Framework/Utils/Range1.h"
 #include "Framework/Numerical/GSLUtils.h"
 #include "Framework/Utils/XSecSplineList.h"
+#include "Physics/Multinucleon/XSection/SuSAv2MECPXSec.h"
+#include "Physics/Multinucleon/XSection/NievesSimoVacasMECPXSec2016.h"
+#include "Physics/QuasiElastic/XSection/SuSAv2QELPXSec.h"
+#include "Framework/EventGen/HybridXSecAlgorithm.h"
+#include "Physics/HadronTensors/TabulatedLabFrameHadronTensor.h"
+#include "Physics/HadronTensors/HadronTensorI.h"
 
 using namespace genie;
 using namespace genie::constants;
@@ -87,6 +94,110 @@ double MECXSec::Integrate(
 
   double kine_min[2] = { TMin,  CosthMin };
   double kine_max[2] = { TMax,  CosthMax };
+
+  // Attempt GPU-accelerated 2D numerical quadrature if GPU is enabled
+  if ( TabulatedLabFrameHadronTensor::GpuEnabled() ) {
+    // Match the native CPU's rectangular integration domain above. NSV-Q3Max
+    // sets those bounds; the CPU integrand imposes no additional Q3 cut.
+    // Event-generation rejection sampling has its own Q3 cut and keeps it.
+    const double integration_q3_max = std::numeric_limits<double>::infinity();
+    double Q2min = in->ProcInfo().IsEM() ?
+      genie::utils::kinematics::electromagnetic::kMinQ2Limit :
+      genie::controls::kMinQ2Limit;
+
+    // 1. SuSAv2 MEC
+    const SuSAv2MECPXSec* susa_mec = dynamic_cast<const SuSAv2MECPXSec*>(model);
+    if ( susa_mec && susa_mec->SupportsGpuTensor() && susa_mec->HadronTensorModel() ) {
+      int probe_pdg = in->InitState().ProbePdg();
+      int tensor_pdg = kPdgTgtC12;
+      HadronTensorType_t tensor_type = (pdg::IsNeutrino(probe_pdg) || pdg::IsAntiNeutrino(probe_pdg)) ?
+        kHT_MEC_FullAll : kHT_MEC_EM;
+      const TabulatedLabFrameHadronTensor* tensor = dynamic_cast<const TabulatedLabFrameHadronTensor*>(
+        susa_mec->HadronTensorModel()->GetTensor(tensor_pdg, tensor_type));
+      if ( tensor && tensor->HasGpuTensor() ) {
+        double Delta_Q_value = susa_mec->Qvalue(*in);
+        double Vud = 0.97427;
+        const genie::Registry* temp_reg = genie::AlgConfigPool::Instance()->CommonList("Param", "CKM");
+        if (temp_reg) Vud = temp_reg->GetDouble("CKM-Vud");
+        double gpu_xsec = 0.0;
+        bool ok = tensor->IntegrateGPU(
+          probe_pdg, Enu, in->InitState().Probe()->Mass(), LepMass,
+          Delta_Q_value, TMin, TMax, CosthMin, CosthMax,
+          integration_q3_max, Q2min, true /* use_rosenbluth */, Vud,
+          gpu_xsec, fGSLRelTol, fGSLMaxEval);
+        if ( ok ) {
+          double scale = susa_mec->ScalingFactor(*in);
+          return gpu_xsec * scale;
+        }
+      }
+    }
+
+    // 2. SuSAv2 QEL 1p1h (direct or wrapped in HybridXSecAlgorithm)
+    const SuSAv2QELPXSec* susa_qel = dynamic_cast<const SuSAv2QELPXSec*>(model);
+    if ( !susa_qel ) {
+      const HybridXSecAlgorithm* hybrid = dynamic_cast<const HybridXSecAlgorithm*>(model);
+      if ( hybrid ) {
+        susa_qel = dynamic_cast<const SuSAv2QELPXSec*>(hybrid->ChooseXSecAlg(*in));
+      }
+    }
+    if ( susa_qel && susa_qel->IsSuSAv2() && susa_qel->HadronTensorModel() ) {
+      int tensor_pdg = kPdgTgtC12;
+      HadronTensorType_t tensor_type = kHT_QE_Full;
+      if ( in->ProcInfo().IsEM() ) {
+        int hit_nuc_pdg = in->InitState().Tgt().HitNucPdg();
+        if ( pdg::IsProton(hit_nuc_pdg) ) tensor_type = kHT_QE_EM_proton;
+        else if ( pdg::IsNeutron(hit_nuc_pdg) ) tensor_type = kHT_QE_EM_neutron;
+        else tensor_type = kHT_QE_EM;
+      }
+      const TabulatedLabFrameHadronTensor* tensor = dynamic_cast<const TabulatedLabFrameHadronTensor*>(
+        susa_qel->HadronTensorModel()->GetTensor(tensor_pdg, tensor_type));
+      if ( tensor && tensor->HasGpuTensor() ) {
+        double Delta_Q_value = susa_qel->Qvalue(*in);
+        double Vud = 0.97427;
+        const genie::Registry* temp_reg = genie::AlgConfigPool::Instance()->CommonList("Param", "CKM");
+        if (temp_reg) Vud = temp_reg->GetDouble("CKM-Vud");
+        double gpu_xsec = 0.0;
+        bool ok = tensor->IntegrateGPU(
+          in->InitState().ProbePdg(), Enu, in->InitState().Probe()->Mass(), LepMass,
+          Delta_Q_value, TMin, TMax, CosthMin, CosthMax,
+          integration_q3_max, Q2min, true /* use_rosenbluth */, Vud,
+          gpu_xsec, fGSLRelTol, fGSLMaxEval);
+        if ( ok ) {
+          double scale = susa_qel->ScalingFactor(*in);
+          return gpu_xsec * scale;
+        }
+      }
+    }
+
+    // 3. Nieves MEC
+    const NievesSimoVacasMECPXSec2016* nieves_mec = dynamic_cast<const NievesSimoVacasMECPXSec2016*>(model);
+    if ( nieves_mec && nieves_mec->SupportsGpuTensor() && nieves_mec->HadronTensorModel() ) {
+      int target_pdg = in->InitState().Tgt().Pdg();
+      int probe_pdg = in->InitState().ProbePdg();
+      int tensor_pdg = kPdgTgtC12;
+      if ( target_pdg == tensor_pdg ) {
+        const bool pn = in->InitState().Tgt().HitNucPdg() == kPdgClusterNP;
+        const bool delta = in->ExclTag().KnownResonance();
+        HadronTensorType_t tensor_type = delta ?
+          (pn ? kHT_MEC_Deltapn : kHT_MEC_DeltaAll) :
+          (pn ? kHT_MEC_Fullpn : kHT_MEC_FullAll);
+        const TabulatedLabFrameHadronTensor* tensor = dynamic_cast<const TabulatedLabFrameHadronTensor*>(
+          nieves_mec->HadronTensorModel()->GetTensor(tensor_pdg, tensor_type));
+        if ( tensor && tensor->HasGpuTensor() ) {
+          double Q_value = genie::utils::mec::Qvalue(target_pdg, probe_pdg);
+          double gpu_xsec = 0.0;
+          bool ok = tensor->IntegrateGPU(
+            probe_pdg, Enu, in->InitState().Probe()->Mass(), LepMass,
+            Q_value, TMin, TMax, CosthMin, CosthMax,
+            integration_q3_max, Q2min, false /* use_rosenbluth */, 0.97427,
+            gpu_xsec, fGSLRelTol, fGSLMaxEval);
+          if ( ok ) {
+            return gpu_xsec * nieves_mec->TensorScale(*in);
+          }
+        }
+      }
+    }
+  }
 
   double xsec = 0;
 

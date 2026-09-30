@@ -50,6 +50,7 @@ if(($match = grep(/--help/i, @ARGV)) > 0) {
   print "    g2c                  Link against external libraries built with g77              default: disabled \n";
   print "    professor2           Build bundled professor2 libraries                          default: disabled \n";
   print "    asan                 Enable AddressSanitizer (-fsanitize=address)                default: disabled \n";
+  print "    gpu                  GPU acceleration via the bundled gpu_spline library         default: disabled (use --enable-gpu=auto to detect CUDA/ROCm) \n";
   print "\n options for 3rd party software, prefix with --with- (eg --with-lhapdf5-lib=/some/path/)\n\n";
   print "    compiler          Compiler to use (any of clang,gcc)                          default: gcc \n";
   print "    optimiz-level     Compiler optimization        any of O,O2,O3,OO,Os / default: O2 \n";
@@ -76,7 +77,11 @@ if(($match = grep(/--help/i, @ARGV)) > 0) {
   print "    boost-inc         boost includes path          needed if you --enable-incl         (if unset: tries to auto-detect it) \n";
   print "    boost-lib         boost library path           needed if you --enable-incl         (if unset: tries to auto-detect it) \n";
   print "    gfortran-lib      libgfortran library path     needed if you --enable-gfortran     (if unset: tries to auto-detect it) \n";
-  print "    g2c-lib           libg2c library path          needed if you --enable-g2c          (if unset: tries to auto-detect it) \n\n";
+  print "    g2c-lib           libg2c library path          needed if you --enable-g2c          (if unset: tries to auto-detect it) \n";
+  print "    gpu-backend       GPU backend: cuda or hip     used if you --enable-gpu            (default: cuda; hip is experimental) \n";
+  print "    cuda-path         CUDA toolkit path            needed if you --enable-gpu (cuda)   (if unset: checks \$CUDA_PATH, \$CUDA_HOME, then /usr/local/cuda) \n";
+  print "    rocm-path         ROCm installation path       needed if you --enable-gpu (hip)    (if unset: checks \$ROCM_PATH, then /opt/rocm) \n";
+  print "    gpu-archs         GPU architectures to build   used if you --enable-gpu            (default: portable multi-arch; native = this machine's GPU; or e.g. 70,80 / gfx90a) \n\n";
   print "If the printout was too long then pipe it through a pager, eg: \n";
   print "./configure --help | more \n";
   exit 0;
@@ -185,6 +190,7 @@ my $gopt_enable_gfortran             = "NO";
 my $gopt_enable_g2c                  = "NO";
 my $gopt_enable_professor2           = "NO";
 my $gopt_enable_asan                 = "NO";
+my $gopt_enable_gpu                  = "NO";
 
 # Check configure's command line arguments for non-default values
 #
@@ -227,6 +233,8 @@ if(($match = grep(/--enable-g2c/i,                  @ARGV)) > 0) { $gopt_enable_
 if(($match = grep(/--enable-professor2/i,           @ARGV)) > 0) { $gopt_enable_professor2           = "YES"; }
 if(($match = grep(/--enable-asan/i,                 @ARGV)) > 0) { $gopt_enable_asan                 = "YES"; }
 if(($match = grep(/--disable-asan/i,                @ARGV)) > 0) { $gopt_enable_asan                 = "NO";  }
+if(($match = grep(/--enable-gpu/i,                  @ARGV)) > 0) { $gopt_enable_gpu                  = "YES"; }
+if(($match = grep(/--disable-gpu/i,                 @ARGV)) > 0) { $gopt_enable_gpu                  = "NO";  }
 
 # LHAPDF6 and LHAPDF5 are mutually exlusive
 if ($gopt_enable_lhapdf6 eq "YES" && $gopt_enable_lhapdf5 eq "YES") {
@@ -1005,6 +1013,137 @@ if ($gopt_enable_professor2 eq "YES") {
   print "Done.\n";
 }
 
+# ------------------------------------------------
+# GPU toolkit (CUDA or ROCm/HIP) for the bundled gpu_spline library
+# ------------------------------------------------
+
+my $gopt_with_gpu_backend = "cuda";
+my $gopt_with_cuda_path   = "";
+my $gopt_with_rocm_path   = "";
+my $gopt_with_gpu_archs   = "";
+
+# Helpers for locating a usable toolkit and a GPU on this machine.
+sub gpu_cuda_ok { my $p = shift; return (-e "$p/include/cuda_runtime.h" && -e "$p/lib64/libcudart.so" && -e "$p/bin/nvcc"); }
+sub gpu_rocm_ok { my $p = shift; return (-e "$p/include/hip/hip_runtime.h" && -e "$p/lib/libamdhip64.so" && -e "$p/bin/hipcc"); }
+sub gpu_tool_home {
+  my $tool = shift;
+  my $where = `command -v $tool 2>/dev/null`; chomp($where);
+  return "" if($where eq "");
+  $where =~ s/\/bin\/$tool$//;
+  return $where;
+}
+sub gpu_first_ok {
+  my ($check, @candidates) = @_;
+  foreach my $p (@candidates) {
+    next if(!defined $p || $p eq "");
+    $p =~ s/\/+$//;
+    return $p if($check->($p));
+  }
+  return "";
+}
+sub gpu_newest_first { return reverse sort { my ($x) = $a =~ /(\d+(?:\.\d+)*)$/; my ($y) = $b =~ /(\d+(?:\.\d+)*)$/; $x = "0" if !defined $x; $y = "0" if !defined $y; my @x = split(/\./,$x); my @y = split(/\./,$y); ($x[0]||0) <=> ($y[0]||0) || ($x[1]||0) <=> ($y[1]||0) || ($x[2]||0) <=> ($y[2]||0) } @_; }
+sub gpu_nvidia_present { my $out = `nvidia-smi -L 2>/dev/null`; return ($out =~ /GPU \d+:/) ? 1 : 0; }
+sub gpu_amd_present    { return (-e "/dev/kfd") ? 1 : 0; }
+
+my @gpu_cuda_candidates = ();
+my @gpu_rocm_candidates = ();
+if($options=~m/--with-cuda-path=(\S*)/i) { push(@gpu_cuda_candidates, $1); }
+push(@gpu_cuda_candidates, $ENV{'CUDA_PATH'}, $ENV{'CUDA_HOME'}, gpu_tool_home("nvcc"), "/usr/local/cuda",
+     gpu_newest_first(glob("/usr/local/cuda-*")));
+if($options=~m/--with-rocm-path=(\S*)/i) { push(@gpu_rocm_candidates, $1); }
+push(@gpu_rocm_candidates, $ENV{'ROCM_PATH'}, gpu_tool_home("hipcc"), "/opt/rocm",
+     gpu_newest_first(glob("/opt/rocm-*")));
+
+# --enable-gpu=auto: pick CUDA or HIP from the toolkits found; stay CPU-only if none.
+my $gpu_auto = ($options=~m/--enable-gpu=auto\b/i) ? 1 : 0;
+if($gopt_enable_gpu eq "YES" && $gpu_auto) {
+  my $requested = ($options=~m/--with-gpu-backend=(\S*)/i) ? lc($1) : "";
+  my $cuda = ($requested eq "" || $requested eq "cuda") ? gpu_first_ok(\&gpu_cuda_ok, @gpu_cuda_candidates) : "";
+  my $rocm = ($requested eq "" || $requested eq "hip")  ? gpu_first_ok(\&gpu_rocm_ok, @gpu_rocm_candidates) : "";
+  my $nvidia = gpu_nvidia_present();
+  my $amd    = gpu_amd_present();
+  print "GPU auto-detection: CUDA toolkit: " . ($cuda eq "" ? "none" : $cuda) .
+        "; ROCm: " . ($rocm eq "" ? "none" : $rocm) .
+        "; NVIDIA GPU present: " . ($nvidia ? "yes" : "no") .
+        "; AMD GPU present: " . ($amd ? "yes" : "no") . "\n";
+  if($cuda ne "" && ($rocm eq "" || $nvidia || !$amd)) {
+    $gopt_with_gpu_backend = "cuda";
+    $gopt_with_cuda_path   = $cuda;
+  } elsif($rocm ne "") {
+    $gopt_with_gpu_backend = "hip";
+    $gopt_with_rocm_path   = $rocm;
+  } else {
+    print "*** Notice *** --enable-gpu=auto: no CUDA or ROCm toolkit found; building without GPU support.\n";
+    print "*** Notice *** Use --with-cuda-path=/some/path/ or --with-rocm-path=/some/path/ if one is installed.\n\n";
+    $gopt_enable_gpu = "NO";
+  }
+  if($gopt_enable_gpu eq "YES") {
+    print "GPU auto-detection: using the $gopt_with_gpu_backend backend" .
+          ($gopt_with_gpu_backend eq "hip" ? " (experimental)" : "") . "\n";
+  }
+}
+elsif($gopt_enable_gpu eq "YES") {
+  if($options=~m/--with-gpu-backend=(\S*)/i) {
+    $gopt_with_gpu_backend = lc($1);
+  }
+  if($gopt_with_gpu_backend ne "cuda" && $gopt_with_gpu_backend ne "hip") {
+    print "*** Error *** --with-gpu-backend must be cuda or hip (got $gopt_with_gpu_backend)\n\n";
+    exit 1;
+  }
+  if($gopt_with_gpu_backend eq "cuda") {
+    if($options=~m/--with-cuda-path=(\S*)/i) { $gopt_with_cuda_path = $1; }
+    elsif(defined $ENV{'CUDA_PATH'}) { $gopt_with_cuda_path = $ENV{'CUDA_PATH'}; }
+    elsif(defined $ENV{'CUDA_HOME'}) { $gopt_with_cuda_path = $ENV{'CUDA_HOME'}; }
+    else { $gopt_with_cuda_path = "/usr/local/cuda"; }
+    print "Using CUDA from $gopt_with_cuda_path\n";
+    if(!gpu_cuda_ok($gopt_with_cuda_path)) {
+      print "*** Error *** No usable CUDA toolkit (include/cuda_runtime.h, lib64/libcudart.so, bin/nvcc) in $gopt_with_cuda_path\n";
+      print "*** Error *** Specify it using --with-cuda-path=/some/path/ (or use --enable-gpu=auto)\n";
+      print "*** Error *** Otherwise, you should --disable-gpu\n\n";
+      exit 1;
+    }
+  } else {
+    if($options=~m/--with-rocm-path=(\S*)/i) { $gopt_with_rocm_path = $1; }
+    elsif(defined $ENV{'ROCM_PATH'}) { $gopt_with_rocm_path = $ENV{'ROCM_PATH'}; }
+    else { $gopt_with_rocm_path = "/opt/rocm"; }
+    print "Using ROCm/HIP from $gopt_with_rocm_path (experimental backend)\n";
+    if(!gpu_rocm_ok($gopt_with_rocm_path)) {
+      print "*** Error *** No usable ROCm installation (include/hip/hip_runtime.h, lib/libamdhip64.so, bin/hipcc) in $gopt_with_rocm_path\n";
+      print "*** Error *** Specify it using --with-rocm-path=/some/path/ (or use --enable-gpu=auto)\n";
+      print "*** Error *** Otherwise, you should --disable-gpu\n\n";
+      exit 1;
+    }
+  }
+}
+
+# GPU architectures: default is a portable multi-architecture build (see
+# gpu_spline/Makefile). --with-gpu-archs=native builds only for the GPU in this
+# machine; a comma-separated list (e.g. 70,80 or gfx90a,gfx942) selects others.
+if($gopt_enable_gpu eq "YES" && $options=~m/--with-gpu-archs=(\S*)/i) {
+  $gopt_with_gpu_archs = lc($1);
+  $gopt_with_gpu_archs =~ s/,/ /g;
+  if($gopt_with_gpu_archs eq "native") {
+    my $present = ($gopt_with_gpu_backend eq "cuda") ? gpu_nvidia_present() : gpu_amd_present();
+    if(!$present) {
+      print "*** Error *** --with-gpu-archs=native needs " . ($gopt_with_gpu_backend eq "cuda" ? "an NVIDIA" : "an AMD") .
+            " GPU in this machine, and none was found.\n";
+      print "*** Error *** Drop the option for a portable build, or list architectures explicitly.\n\n";
+      exit 1;
+    }
+    print "Building GPU code only for the GPU in this machine (--with-gpu-archs=native)\n";
+  } else {
+    print "Building GPU code for architectures: $gopt_with_gpu_archs\n";
+  }
+}
+if($gopt_enable_gpu eq "YES") {
+  my $present = ($gopt_with_gpu_backend eq "cuda") ? gpu_nvidia_present() : gpu_amd_present();
+  if(!$present) {
+    print "*** Notice *** No " . ($gopt_with_gpu_backend eq "cuda" ? "NVIDIA" : "AMD") .
+          " GPU visible on this machine. GPU code is built anyway and runs where a GPU is available;\n";
+    print "*** Notice *** elsewhere GENIE falls back to the CPU.\n";
+  }
+}
+
 # Save config options
 #
 print MKCONF "GOPT_ENABLE_PYTHIA6=$gopt_enable_pythia6\n";
@@ -1066,6 +1205,11 @@ print MKCONF "GOPT_WITH_GFORTRAN_LIB=$gopt_with_gfortran_lib\n";
 print MKCONF "GOPT_WITH_G2C_LIB=$gopt_with_g2c_lib\n";
 print MKCONF "GOPT_ENABLE_ASAN=$gopt_enable_asan\n";
 print MKCONF "GOPT_WITH_SANITIZER_FLAG=$gopt_with_sanitizer_flag\n";
+print MKCONF "GOPT_ENABLE_GPU=$gopt_enable_gpu\n";
+print MKCONF "GOPT_WITH_GPU_BACKEND=$gopt_with_gpu_backend\n";
+print MKCONF "GOPT_WITH_CUDA_PATH=$gopt_with_cuda_path\n";
+print MKCONF "GOPT_WITH_ROCM_PATH=$gopt_with_rocm_path\n";
+print MKCONF "GOPT_WITH_GPU_ARCHS=$gopt_with_gpu_archs\n";
 close(MKCONF);
 
 print "\nYour input configuration options were: @ARGV";
