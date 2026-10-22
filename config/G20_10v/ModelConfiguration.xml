@@ -131,10 +131,15 @@ University of Liverpool
   <param type="alg" name="XSecModel@genie::EventGenerator/DFR-NC">         genie::ReinDFRPXSec/Default           </param>
 
   <!-- <param type="alg" name="XSecModel@genie::EventGenerator/MEC-CC">         genie::NievesSimoVacasMECPXSec2016/Default </param> -->
-  <!-- NuWro-compatible pre-FSI prescriptions with conserving GENIE kinematics.
-       Select Valencia2020MECPXSec/Default explicitly for the previous prescription.
-       Use matching NuWroCompatible splines for event generation. -->
-  <param type="alg" name="XSecModel@genie::EventGenerator/MEC-CC">         genie::Valencia2020MECPXSec/NuWroCompatible </param>
+  <!-- Valencia2020 in GENIE's own prescription, for use with GENIE FSI
+       (HadronTransp-Model below): TargetQValue energy shift, LocalFGM initial
+       nucleons and, via config/G20_10v/MECGenerator.xml, Valencia2020-RemovalEnergy
+       = true (removal energy charged to the hadrons, credited to the residual).
+       For pre-FSI comparisons with native NuWro select
+       Valencia2020MECPXSec/NuWroCompatible with HadronTransp-Enable=false,
+       e.g. through a GXMLPATH overlay of this file.
+       Splines are keyed by this configuration name; use matching splines. -->
+  <param type="alg" name="XSecModel@genie::EventGenerator/MEC-CC">         genie::Valencia2020MECPXSec/Default </param>
 
   <param type="alg" name="XSecModel@genie::EventGenerator/MEC-NC">         genie::EmpiricalMECPXSec2015/Default  </param>
   <param type="alg" name="XSecModel@genie::EventGenerator/MEC-EM">         genie::EmpiricalMECPXSec2015/Default  </param>

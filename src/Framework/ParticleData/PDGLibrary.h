@@ -54,6 +54,7 @@ private:
   virtual ~PDGLibrary();
 
   bool LoadDBase(void);
+  void AddNucleonClusters(void); // 3-nucleon MEC clusters (not in the catalogue file)
   bool AddDarkSector ();
   bool AddHNL  (void);
 

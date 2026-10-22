@@ -15,6 +15,8 @@
 #include <memory>
 #include <algorithm>
 #include <cmath>
+#include <sstream>
+#include <cstdlib>
 #include <stdexcept>
 #include "Physics/Multinucleon/EventGen/Valencia2020Kinematics.h"
 #include "Physics/Multinucleon/EventGen/Valencia2020NuWro.h"
@@ -69,7 +71,33 @@ EventRecordVisitorI("genie::MECGenerator", config)
 //___________________________________________________________________________
 MECGenerator::~MECGenerator()
 {
-
+  this->PrintValencia2020Summary();
+}
+//___________________________________________________________________________
+void MECGenerator::PrintValencia2020Summary(void) const
+{
+  // Unconditional (not subject to message thresholds): the user must see
+  // how many Valencia2020 events were discarded or used a fallback.
+  if (fValenciaGenerated + fValenciaSkipped > 0) {
+    std::cerr << "\n[Valencia2020 summary] hadronized=" << fValenciaGenerated
+      << " skipped=" << fValenciaSkipped << " (hadronic exhaustion " << fValenciaSkippedHadronic
+      << ", lepton stage " << fValenciaSkipped-fValenciaSkippedHadronic << ")";
+    if (fValenciaRemovalIgnored)
+      std::cerr << " removal_energy=ignored(NuWroCompatible)";
+    else if (fValenciaRemovalEnergy)
+      std::cerr << " removal_energy_charged=" << fValenciaRemovalCharged
+        << " removal_energy_fallbacks=" << fValenciaRemovalFallbacks;
+    else
+      std::cerr << " removal_energy=off";
+    if (fValenciaNuWro3p3h)
+      std::cerr << " nuwro_3p3h_pauli_flag=" << fValenciaNuWro3p3hPauli << "/" << fValenciaNuWro3p3h;
+    std::cerr << " envelope_raises=" << fValenciaEnvelopeRaises
+      << " dense_envelope_fallbacks=" << fValenciaDenseFallbacks
+      << " envelope_inflation=" << fValenciaEnvelopeInflation << "\n"
+      << "[Valencia2020 summary] Skipped events were regenerated from scratch (process"
+         " reselected), so the skipped fraction is the MEC rate deficit; fallbacks keep"
+         " the event but do not charge removal energy.\n";
+  }
 }
 //___________________________________________________________________________
 void MECGenerator::ProcessEventRecord(GHepRecord * event) const
@@ -1337,6 +1365,26 @@ MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
   Kinematics* kinematics = interaction->KinePtr();
   const auto vXSec = dynamic_cast<const Valencia2020MECPXSec*>(fXSecModel);
   const bool nuwro = vXSec && vXSec->NuWroCompatible();
+  {
+    // Valencia2020 chooses the nucleon cluster itself; an interaction that
+    // already carries one comes from SetDiNucleonCode=true, whose per-cluster
+    // splines drop 3p3h. Configuration error: stop at the first event.
+    const int hit = interaction->InitState().Tgt().HitNucPdg();
+    if (pdg::IsNucleonCluster(hit)) {
+      LOG("MEC", pFATAL) << "Valencia2020 requires inclusive MEC interactions; got hit"
+        " nucleon-cluster code " << hit << ". Set SetDiNucleonCode=false in"
+        " MECInteractionListGenerator for this tune and regenerate splines.";
+      exit(78);
+    }
+  }
+  if (nuwro && fValenciaRemovalEnergy && !fValenciaRemovalIgnored) {
+    // NuWroCompatible fixes its own (native NuWro) energy bookkeeping. The
+    // G20_10v tune enables the option for its Default binding, so selecting
+    // NuWroCompatible through an overlay must not need a second overlay.
+    fValenciaRemovalIgnored = true;
+    LOG("MEC", pWARN) << "Valencia2020-RemovalEnergy=true is ignored with "
+      "Valencia2020MECPXSec/NuWroCompatible, which uses native NuWro energy bookkeeping.";
+  }
 
   double Enu = interaction->InitState().ProbeE(kRfLab);
   int NuPDG = interaction->InitState().ProbePdg();
@@ -1379,24 +1427,32 @@ MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
   double XSecMax;
   if (found != fValenciaMaxima.end()) XSecMax = found->second;
   else {
-    XSecMax = utils::mec::GetMaxXSecTlctl(*fXSecModel, *interaction, 0.001, 2.0);
+    // Inflation > 1 only after an underestimate was caught at some energy.
+    XSecMax = fValenciaEnvelopeInflation *
+      utils::mec::GetMaxXSecTlctl(*fXSecModel, *interaction, 0.001, 2.0);
+    // The layered scan can miss the thin support just above the MEC onset.
+    // Fall back to a dense scan of the exact box sampled below.
+    if (!(XSecMax > 0.) || !std::isfinite(XSecMax)) {
+      XSecMax = Valencia2020DenseEnvelope(*interaction, TMin, TMax, CosthMin, q3max);
+      ++fValenciaDenseFallbacks;
+      LOG("MEC", pWARN) << "Valencia2020: layered envelope scan found no support at E = "
+        << Enu << " GeV; dense scan gives " << XSecMax;
+    }
     // Bound the cache for continuous-energy beams; never approximate energy keys.
     if (fValenciaMaxima.size() >= 256) fValenciaMaxima.clear();
     fValenciaMaxima[key] = XSecMax;
   }
   if (!(XSecMax > 0.) || !std::isfinite(XSecMax))
-    throw std::runtime_error("Valencia2020: invalid rejection envelope");
+    SkipValencia2020Event(event, kKineGenErr,
+      "no Valencia2020 support in the sampled (Tl, cos) box at this energy");
 
 
   while (!accept) {
     ++iter;
     if (iter > maxIter) {
       LOG("MEC", pWARN) << "Valencia2020: Couldn't select valid (Tl, Costh) after " << iter << " iterations";
-      event->EventFlags()->SetBitNumber(kKineGenErr, true);
-      genie::exceptions::EVGThreadException exception;
-      exception.SetReason("Couldn't select lepton kinematics for Valencia2020");
-      exception.SwitchOnFastForward();
-      throw exception;
+      SkipValencia2020Event(event, kKineGenErr,
+        "couldn't select Valencia2020 lepton kinematics within the iteration limit");
     }
 
     T = TMin + (TMax - TMin) * rnd->RndKine().Rndm();
@@ -1420,9 +1476,23 @@ MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
       }
 
       if (x_tot > XSecMax) {
-        LOG("MEC", pFATAL) << "Valencia2020 rejection bound exceeded: "
-          << x_tot << " > " << XSecMax << "; stop to avoid biased events.";
-        throw std::runtime_error("Valencia2020 rejection envelope exceeded");
+        // Envelope too small: rebuild it densely, never below 2x this point,
+        // and restart the draw, so this event is sampled correctly. Raise the
+        // inflation applied to all later new envelopes by the same ratio, so
+        // continuous-energy beams (which never reuse a cache entry) are
+        // protected too. Events accepted before this point used a bound that
+        // was too small somewhere; the count is in the end-of-job summary.
+        const double rebuilt = std::max(2.*x_tot,
+          Valencia2020DenseEnvelope(*interaction, TMin, TMax, CosthMin, q3max));
+        fValenciaEnvelopeInflation *= rebuilt/XSecMax;
+        ++fValenciaEnvelopeRaises;
+        LOG("MEC", pWARN) << "Valencia2020 rejection bound exceeded at E = " << Enu
+          << " GeV: " << x_tot << " > " << XSecMax << "; envelope raised to " << rebuilt
+          << ", envelope inflation for new energies now " << fValenciaEnvelopeInflation
+          << ". Earlier events may have used a bound that was too small.";
+        XSecMax = rebuilt;
+        fValenciaMaxima[key] = XSecMax;
+        continue;
       }
 
       accept = (x_tot > XSecMax * rnd->RndKine().Rndm());
@@ -1516,6 +1586,8 @@ MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
   interaction->KinePtr()->SetFSLeptonP4(p4l);
 
   event->AddParticle(pdgc, kIStStableFinalState, momidx, -1, -1, -1, p4l, v4);
+  // CC V-A helicity of the primary lepton, as in the NSV and Empirical branches.
+  utils::SetPrimaryLeptonPolarization(event);
   return selection;
 }
 //___________________________________________________________________________
@@ -1571,10 +1643,13 @@ void MECGenerator::GenerateValencia2020Hadrons(
         auxiliary.KinePtr()->SetKV(kKVTl,T);
         auxiliary.KinePtr()->SetKV(kKVctl,cmin+(1.-cmin)*rng.Rndm());
         double pp,np,pn,three,total;
-        vXSec->GetRawChannelCrossSections(&auxiliary,pp,np,pn,three,total);
+        // Full tables: a channel-isolation overlay must not force the flag on.
+        vXSec->GetUnmaskedRawChannelCrossSections(&auxiliary,pp,np,pn,three,total);
         nuwro_three_pauli = pp+np+pn <= 0.;
       }
     }
+    ++fValenciaNuWro3p3h;
+    if (nuwro_three_pauli) ++fValenciaNuWro3p3hPauli;
   }
   TLorentzVector initial_p4, system_p4, remnant_p4;
   std::vector<TLorentzVector> daughters(count);
@@ -1586,8 +1661,27 @@ void MECGenerator::GenerateValencia2020Hadrons(
   // The compatible Ar40 antineutrino tail can accept only about 2e-5 of
   // proposals. Allow more trials without discarding/reselecting the accepted
   // lepton/channel (which would bias its distribution).
-  const int max_hadronic_trials = nuwro ? 1000000 : 100000;
+  // Same budget in both prescriptions (Default was 1e5, which could exhaust
+  // on low-acceptance Ar40 antineutrino points).
+  const int max_hadronic_trials = 1000000;
+  // Valencia2020-RemovalEnergy: the lepton point and channel come from the
+  // Valencia response, which has support from q0 just above the target
+  // Q-value, while paying the removal energies needs roughly q0 > sum(E_rm)
+  // (~50-90 MeV). Below that no hadronic configuration exists. Rather than
+  // burn the whole budget and drop the event (biasing the MEC rate and the
+  // low-q0 edge), try a limited number of trials with the charge, then keep
+  // the event with the uncharged Sect. III.2 construction and count it.
+  const int removal_trials = 20000;
+  bool charge_removal = !nuwro && fValenciaRemovalEnergy;
   for (int attempt = 0; attempt < max_hadronic_trials && !accepted; ++attempt) {
+    if (charge_removal && attempt == removal_trials) {
+      charge_removal = false;
+      ++fValenciaRemovalFallbacks;
+      LOG("MEC", pWARN) << "Valencia2020: energy transfer q0=" << q.E()
+        << " GeV cannot pay the nuclear removal energy for channel " << selection.channel
+        << "; generating this event without the charge (fallback "
+        << fValenciaRemovalFallbacks << ").";
+    }
     if (nuwro) {
       vertex.SetVect(density->SampleVertex(rng));
       radius = vertex.Vect().Mag();
@@ -1616,6 +1710,7 @@ void MECGenerator::GenerateValencia2020Hadrons(
     }
     initial_p4.SetPxPyPzE(0.,0.,0.,0.);
     std::vector<TVector3> momenta(count);
+    double removal_energy = 0.;
     for (int i=0; i<count; ++i) {
       const int pdgc=selection.initial[i];
       target.SetHitNucPdg(pdgc);
@@ -1623,6 +1718,7 @@ void MECGenerator::GenerateValencia2020Hadrons(
       else {
         fNuclModel->GenerateNucleon(target, radius);
         momenta[i]=fNuclModel->Momentum3();
+        removal_energy += fNuclModel->RemovalEnergy();
       }
     }
     if (nuwro && count==2) {
@@ -1642,6 +1738,12 @@ void MECGenerator::GenerateValencia2020Hadrons(
     // the remnant through the effective initial cluster, preserving closure.
     if (nuwro && count==2)
       initial_p4.SetE(initial_p4.E()-std::max(0.,initial_kinetic-2.*common_kinetic_fermi-.007));
+    // Optional GENIE-native bookkeeping (Default only): the effective initial
+    // cluster pays the nuclear-model removal energies, so the hadronic system
+    // has that much less energy and the residual nucleus that much more.
+    // Four-momentum closure is unchanged.
+    if (charge_removal)
+      initial_p4.SetE(initial_p4.E()-removal_energy);
     // Sect. III.2: independent on-shell initial nucleons, without the legacy
     // fixed-mass pair or a second removal-energy subtraction.
     system_p4 = initial_p4 + q;
@@ -1707,14 +1809,19 @@ void MECGenerator::GenerateValencia2020Hadrons(
     }
   }
   if (!accepted) {
-    event->EventFlags()->SetBitNumber(kHadroSysGenErr, true);
-    std::cerr << "Valencia2020 exhaustion: channel=" << selection.channel
-      << " radius=" << radius << " q0=" << q.E() << " q3=" << q.P()
+    std::ostringstream reason;
+    reason << "exhausted " << max_hadronic_trials << " hadronic trials at fixed lepton/channel:"
+      << " channel=" << selection.channel << " radius=" << radius
+      << " q0=" << q.E() << " q3=" << q.P()
       << " kf0=" << kf[0] << " kf1=" << kf[1] << " kf2=" << kf[2]
       << " last_initial=" << initial_p4.E() << "," << initial_p4.P()
-      << " last_system=" << system_p4.E() << "," << system_p4.P() << std::endl;
-    throw std::runtime_error("Valencia2020: exhausted hadronic trials at fixed lepton/channel");
+      << " last_system=" << system_p4.E() << "," << system_p4.P();
+    ++fValenciaSkippedHadronic;
+    SkipValencia2020Event(event, kHadroSysGenErr, reason.str());
   }
+  ++fValenciaGenerated;
+  if (charge_removal) ++fValenciaRemovalCharged;
+  fValenciaConsecutiveSkips = 0;
 
   event->HitNucleon()->SetMomentum(initial_p4);
   event->Probe()->SetPosition(vertex);
@@ -1731,6 +1838,99 @@ void MECGenerator::GenerateValencia2020Hadrons(
     event->AddParticle(selection.final[i], kIStHadronInTheNucleus, recoil_position,
       -1, -1, -1, daughters[i], vertex);
   interaction->KinePtr()->SetHadSystP4(system_p4);
+}
+//___________________________________________________________________________
+double MECGenerator::Valencia2020DenseEnvelope(const Interaction & in,
+  double TMin, double TMax, double CosthMin, double q3max) const
+{
+  // Brute-force maximum of the same function and box that
+  // SelectValencia2020LeptonKinematics samples, followed by a local zoom
+  // around the best grid point. Returns 2x the maximum found (same safety
+  // factor as the layered scan), or 0 if the density vanishes everywhere.
+  const auto vXSec = dynamic_cast<const Valencia2020MECPXSec*>(fXSecModel);
+  const bool nuwro = vXSec && vXSec->NuWroCompatible();
+  Interaction probe(in);
+  const double Enu = in.InitState().ProbeE(kRfLab);
+  const double LepMass = in.FSPrimLepton()->Mass();
+  const auto density = [&](double T, double c) {
+    if (T < TMin || T > TMax || c < CosthMin || c > 1.) return 0.;
+    const double P = std::sqrt(T*(T+2.*LepMass));
+    const double Q3 = std::sqrt(std::max(0., P*P + Enu*Enu - 2.*P*Enu*c));
+    const double Q0 = Enu - (T + LepMass);
+    if (!(Q3 < q3max && (nuwro || Q3*Q3-Q0*Q0 >= genie::controls::kMinQ2Limit))) return 0.;
+    probe.KinePtr()->SetKV(kKVTl, T);
+    probe.KinePtr()->SetKV(kKVctl, c);
+    if (vXSec) {
+      double pp, np, pn, three, total;
+      vXSec->GetChannelCrossSections(&probe, pp, np, pn, three, total);
+      return total;
+    }
+    return fXSecModel->XSec(&probe, kPSTlctl);
+  };
+  const int nT = 240, nc = 240;
+  const double dT = (TMax-TMin)/nT, dc = (1.-CosthMin)/nc;
+  double best = 0., bestT = TMin, bestc = 1.;
+  const auto visit = [&](double T, double c) {
+    const double value = density(T, c);
+    if (std::isfinite(value) && value > best) { best = value; bestT = T; bestc = c; }
+  };
+  for (int i = 0; i <= nT; ++i)
+    for (int j = 0; j <= nc; ++j) visit(TMin + i*dT, CosthMin + j*dc);
+  // Forward peak and threshold edge are narrow: add dedicated lines.
+  for (double eps : {1.e-3, 1.e-4, 1.e-5})
+    for (int i = 0; i <= nT; ++i) visit(TMin + i*dT, 1.-eps);
+  for (int k = 1; k <= 200; ++k)
+    for (int j = 0; j <= nc; ++j) visit(TMax - k*1.e-4, CosthMin + j*dc);
+  // Local zoom around the best point.
+  for (int i = -40; i <= 40; ++i)
+    for (int j = -40; j <= 40; ++j) visit(bestT + i*dT/40., bestc + j*dc/40.);
+  return 2.*best;
+}
+//___________________________________________________________________________
+void MECGenerator::SkipValencia2020Event(GHepRecord * event, int flag,
+  const std::string & reason) const
+{
+  ++fValenciaSkipped;
+  ++fValenciaConsecutiveSkips;
+  event->EventFlags()->SetBitNumber(flag, true);
+  LOG("MEC", pWARN) << "Valencia2020: skipping event (" << reason
+    << "). Skipped " << fValenciaSkipped << ", generated " << fValenciaGenerated
+    << " so far. Skipped events are regenerated from scratch, so a large"
+       " skip fraction biases the MEC rate.";
+  // Not subject to message thresholds, so "whisper" runs still see skips.
+  if (fValenciaSkipped <= 20 || fValenciaSkipped % 1000 == 0)
+    std::cerr << "[Valencia2020] skipped event #" << fValenciaSkipped << ": " << reason << std::endl;
+  if (fValenciaConsecutiveSkips >= 100000) {
+    // Last-resort backstop. gevgen at a fixed initial state stops gracefully
+    // (and saves) long before this; GMCJDriver-based runs (flux or target
+    // mix, gevgen_fnal, ...) keep throwing neutrinos and cannot stop
+    // otherwise. Reaching this means MEC is impossible everywhere sampled.
+    LOG("MEC", pFATAL) << "Valencia2020: " << fValenciaConsecutiveSkips
+      << " consecutive events skipped without a success; stopping the job."
+      " The output file of this run is not saved. Last reason: " << reason;
+    std::cerr << "[Valencia2020] stopping after " << fValenciaConsecutiveSkips
+      << " consecutive skipped events (no MEC event can be generated). Last reason: "
+      << reason << std::endl;
+    this->PrintValencia2020Summary();
+    std::cerr << std::flush;
+    // exit() would run GENIE's global algorithm-pool teardown while this
+    // algorithm is on the stack (aborts); leave immediately with status 1.
+    std::_Exit(1);
+  }
+  if (fValenciaConsecutiveSkips == 1000) {
+    // Every attempt is failing (e.g. a fixed energy with no realizable
+    // phase space). Do not exit() here: that would skip the application's
+    // output Save(). gevgen at a fixed initial state stops gracefully after
+    // 20 failed events (~2000 skips) and saves; the hard stop is at 1e5.
+    LOG("MEC", pFATAL) << "Valencia2020: 1000 consecutive events skipped without a"
+      " success. Last reason: " << reason;
+    std::cerr << "[Valencia2020] 1000 consecutive events skipped without a success;"
+      " MEC cannot be generated at these kinematics. Last reason: " << reason << std::endl;
+  }
+  genie::exceptions::EVGThreadException exception;
+  exception.SetReason("Valencia2020: " + reason);
+  exception.SwitchOnFastForward();
+  throw exception;
 }
 //___________________________________________________________________________
 void MECGenerator::Configure(const Registry & config)
@@ -1758,6 +1958,7 @@ void MECGenerator::LoadConfig(void)
           fValenciaL[i] < 1 || fValenciaL[i] > 10)
         throw std::invalid_argument("Valencia2020: require P in [-1,1], l in [1,10]");
     }
+    GetParamDef("Valencia2020-RemovalEnergy", fValenciaRemovalEnergy, false);
     fNuclModel = 0;
     RgKey nuclkey = "NuclearModel";
     fNuclModel = dynamic_cast<const NuclearModelI *> (this->SubAlg(nuclkey));

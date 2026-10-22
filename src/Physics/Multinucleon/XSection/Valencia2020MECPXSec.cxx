@@ -13,6 +13,8 @@
 #include "Framework/Conventions/Controls.h"
 #include <algorithm>
 #include <cmath>
+#include <string>
+#include <utility>
 #include "Framework/Conventions/Units.h"
 #include "Framework/Messenger/Messenger.h"
 #include "Framework/ParticleData/PDGCodes.h"
@@ -47,6 +49,21 @@ Valencia2020MECPXSec::~Valencia2020MECPXSec()
 }
 //_________________________________________________________________________
 void Valencia2020MECPXSec::GetRawChannelCrossSections(
+  const Interaction * i, double & pp, double & np, double & pn,
+  double & three, double & total) const
+{
+  RawChannelCrossSections(fHadronTensorModel, i, pp, np, pn, three, total);
+}
+//_________________________________________________________________________
+void Valencia2020MECPXSec::GetUnmaskedRawChannelCrossSections(
+  const Interaction * i, double & pp, double & np, double & pn,
+  double & three, double & total) const
+{
+  RawChannelCrossSections(fUnmaskedHadronTensorModel, i, pp, np, pn, three, total);
+}
+//_________________________________________________________________________
+void Valencia2020MECPXSec::RawChannelCrossSections(
+  const HadronTensorModelI * model,
   const Interaction * interaction,
   double & xsec_pp,
   double & xsec_np,
@@ -76,26 +93,35 @@ void Valencia2020MECPXSec::GetRawChannelCrossSections(
   else if (A_request >= 15 && A_request < 22) {
     tensor_pdg = kPdgTgtO16;
   }
-  else if (A_request >= 22 && A_request <= 50) {
-    // 40Ca grid (also used directly as proxy for 40Ar)
+  else if (A_request >= 22) {
+    // 40Ca grid: nearest available table for every A >= 22, including 40Ar
+    // and heavy nuclei (Fe56, Pb208). Per-nucleon response, scaled by A.
     tensor_pdg = kPdgTgtCa40;
   }
   else {
+    // A < 9 (no lighter table): C12 per-nucleon response.
     tensor_pdg = kPdgTgtC12;
   }
   if (NuWroCompatible()) {
     const int Z = interaction->InitState().Tgt().Z();
     tensor_pdg = Z > 12 ? kPdgTgtCa40 : (Z > 6 ? kPdgTgtO16 : kPdgTgtC12);
   }
+  // There is no Valencia table below C12: say so once per light target.
+  if (A_request < 9 && tensor_pdg == kPdgTgtC12 &&
+      fLightTargetsNotified.insert(target_pdg).second) {
+    LOG("Valencia2020MEC", pNOTICE)
+      << "Target " << target_pdg << " (A = " << A_request << " < 9) uses the "
+      << "C12 per-nucleon Valencia2020 tables scaled by A (proxy, untested)";
+  }
 
   const LabFrameHadronTensorI* tensor_pp = dynamic_cast<const LabFrameHadronTensorI*>(
-    fHadronTensorModel->GetTensor(tensor_pdg, genie::kHT_MEC_Valencia2020_pp));
+    model->GetTensor(tensor_pdg, genie::kHT_MEC_Valencia2020_pp));
   const LabFrameHadronTensorI* tensor_np = dynamic_cast<const LabFrameHadronTensorI*>(
-    fHadronTensorModel->GetTensor(tensor_pdg, genie::kHT_MEC_Valencia2020_np));
+    model->GetTensor(tensor_pdg, genie::kHT_MEC_Valencia2020_np));
   const LabFrameHadronTensorI* tensor_pn = dynamic_cast<const LabFrameHadronTensorI*>(
-    fHadronTensorModel->GetTensor(tensor_pdg, genie::kHT_MEC_Valencia2020_pn));
+    model->GetTensor(tensor_pdg, genie::kHT_MEC_Valencia2020_pn));
   const LabFrameHadronTensorI* tensor_3p3h = dynamic_cast<const LabFrameHadronTensorI*>(
-    fHadronTensorModel->GetTensor(tensor_pdg, genie::kHT_MEC_Valencia2020_3p3h));
+    model->GetTensor(tensor_pdg, genie::kHT_MEC_Valencia2020_3p3h));
 
   if (!tensor_pp || !tensor_np || !tensor_pn) {
     LOG("Valencia2020MEC", pWARN) << "Failed to load hadron tensors for pdg " << tensor_pdg;
@@ -129,14 +155,24 @@ void Valencia2020MECPXSec::GetRawChannelCrossSections(
   if (omega <= 0. || omega > tensor_pp->q0Max() || omega > Q3) return;
 
   a_scale *= fXSecCCScale;
-  if (fMECScaleAlg) a_scale *= fMECScaleAlg->GetScaling(*interaction);
+  if (fMECScaleAlg) {
+    // MECScaleAlg (e.g. MECScaleVsW) reads kKVQ0/kKVQ3. Callers set only
+    // Tl and cos(theta_l) (event sampler, envelope scans) while the spline
+    // integrand also sets Q0/Q3; set them here so every path scales alike.
+    // Same convention as the integrand: unshifted q0 = E_nu - E_l, |q|.
+    Interaction scaled(*interaction);
+    scaled.KinePtr()->SetKV(kKVQ0, Q0);
+    scaled.KinePtr()->SetKV(kKVQ3, Q3);
+    a_scale *= fMECScaleAlg->GetScaling(scaled);
+  }
 
   const auto contract = [&](const LabFrameHadronTensorI* tensor) {
     double result = tensor->dSigma_dT_dCosTheta(interaction, Q_value);
-    if (NuWroCompatible()) {
-      // Native mec_kind=6 uses sin^2(theta), rather than sin^2(theta/2),
-      // in the massive-lepton W4 term. Keep this local: other GENIE models
-      // continue to use the shared tensor's standard contraction.
+    if (fNuWroW4SinTheta) {
+      // Validation only. Native NuWro mec_kind=6 writes sin^2(theta) where
+      // the exact contraction L_mu_nu q^mu q^nu = m_l^2 (k.k') gives
+      // sin^2(theta/2) in the massive-lepton W4 term. This adds the
+      // difference to reproduce that typo; the default keeps the exact form.
       const double w4 = .5*(tensor->zz(omega,Q3).real()
                           -tensor->xx(omega,Q3).real())/(Q3*Q3);
       result += 2./kPi*pl*El*kGF2*ml*ml*w4*(1.-cos_l*cos_l-.5*(1.-cos_l));
@@ -251,18 +287,69 @@ double Valencia2020MECPXSec::XSec(
 //_________________________________________________________________________
 double Valencia2020MECPXSec::Integral(const Interaction * interaction) const
 {
+  // Splines must be inclusive (2p2h + 3p3h). A nucleon-cluster hit code means
+  // the MEC interaction list was built with SetDiNucleonCode=true: XSec would
+  // then return single channels and the 3p3h rate would be silently lost.
+  const int hit = interaction->InitState().Tgt().HitNucPdg();
+  if (pdg::IsNucleonCluster(hit)) {
+    LOG("Valencia2020MECPXSec", pFATAL) << "Valencia2020 splines require an "
+      "inclusive MEC interaction (no nucleon-cluster hit code), got " << hit
+      << ". Set SetDiNucleonCode=false in MECInteractionListGenerator for this tune.";
+    exit(78);
+  }
   double xsec = fXSecIntegrator->Integrate(this, interaction);
   return xsec;
 }
 //_________________________________________________________________________
 bool Valencia2020MECPXSec::ValidProcess(const Interaction * interaction) const
 {
-  if (interaction->TestBit(kISkipProcessChk)) return true;
-  const ProcessInfo & proc_info = interaction->ProcInfo();
-  return proc_info.IsMEC() && proc_info.IsWeakCC() &&
-    interaction->InitState().Tgt().A() >= 4 &&
-    (pdg::IsNeutrino(interaction->InitState().ProbePdg()) ||
-     pdg::IsAntiNeutrino(interaction->InitState().ProbePdg()));
+  if (!interaction->TestBit(kISkipProcessChk)) {
+    const ProcessInfo & proc_info = interaction->ProcInfo();
+    const bool valid = proc_info.IsMEC() && proc_info.IsWeakCC() &&
+      interaction->InitState().Tgt().A() >= 4 &&
+      (pdg::IsNeutrino(interaction->InitState().ProbePdg()) ||
+       pdg::IsAntiNeutrino(interaction->InitState().ProbePdg()));
+    if (!valid) return false;
+  }
+  // Checked even with kISkipProcessChk (cached, cheap): otherwise EnergyShift
+  // -> utils::mec::Qvalue would exit() for a target whose CC daughter nucleus
+  // is not in the PDG table (light/exotic targets). Such targets get zero.
+  if (fEnergyShiftPrescription == "TargetQValue" &&
+      !this->TargetQValueAvailable(interaction->InitState().Tgt().Pdg(),
+                                   interaction->InitState().ProbePdg())) {
+    return false;
+  }
+  return true;
+}
+//_________________________________________________________________________
+bool Valencia2020MECPXSec::TargetQValueAvailable(
+  int target_pdg, int probe_pdg) const
+{
+  // Mirrors utils::mec::Qvalue (MECUtils.cxx): it looks up the target and
+  // target+10000 (Z+1) for probe_pdg > 0, target-10000 (Z-1) otherwise.
+  const int sign = probe_pdg > 0 ? +1 : -1;
+  const std::pair<int,int> key(target_pdg, sign);
+  if (fQvalueTargetsOK.count(key)) return true;
+  if (fQvalueTargetsMissing.count(key)) return false;
+
+  const int near_pdg = target_pdg + sign*10000;
+  PDGLibrary * pdglib = PDGLibrary::Instance();
+  const bool has_target = pdglib->Find(target_pdg, false) != nullptr;
+  const bool has_near   = pdglib->Find(near_pdg,   false) != nullptr;
+  if (has_target && has_near) {
+    fQvalueTargetsOK.insert(key);
+    return true;
+  }
+  fQvalueTargetsMissing.insert(key);
+  std::string missing;
+  if (!has_target) missing = std::to_string(target_pdg);
+  if (!has_near) missing += (missing.empty() ? "" : " and ") + std::to_string(near_pdg);
+  LOG("Valencia2020MEC", pWARN)
+    << "Valencia2020 TargetQValue energy shift for target " << target_pdg
+    << (sign > 0 ? " (neutrino)" : " (antineutrino)") << " needs nucleus "
+    << missing << ", missing from the PDG table: this MEC process is disabled "
+    << "(zero cross section) for this target";
+  return false;
 }
 //_________________________________________________________________________
 void Valencia2020MECPXSec::Configure(const Registry & config)
@@ -282,8 +369,9 @@ void Valencia2020MECPXSec::LoadConfig(void)
   bool good_config = true;
 
   GetParamDef("MEC-CC-XSecScale", fXSecCCScale, 1.0);
-  GetParamDef("MEC-NC-XSecScale", fXSecNCScale, 1.0);
+  GetParamDef("MEC-NC-XSecScale", fXSecNCScale, 1.0); // unused: CC-only model
   GetParamDef("Include3p3h", fInclude3p3h, true);
+  GetParamDef("NuWroW4SinTheta", fNuWroW4SinTheta, false);
   GetParamDef("PreFSIPrescription", fPreFSIPrescription, string("GENIE"));
   if (fPreFSIPrescription != "GENIE" && fPreFSIPrescription != "NuWro") {
     good_config = false;
@@ -305,6 +393,26 @@ void Valencia2020MECPXSec::LoadConfig(void)
   if (!fHadronTensorModel) {
     good_config = false;
     LOG("Valencia2020MECPXSec", pERROR) << "The required HadronTensorAlg does not exist.";
+  }
+
+  fUnmaskedHadronTensorModel = fHadronTensorModel;
+  // Reuse the main tensor model when the Unmasked set adds nothing of its own
+  // (no channel-isolation overlay): avoids loading every table twice.
+  bool unmasked_differs = false;
+  if (GetConfig().Exists("UnmaskedHadronTensorAlg")) {
+    const RgAlg unmasked = GetConfig().GetAlg("UnmaskedHadronTensorAlg");
+    const RgAlg main_alg = GetConfig().GetAlg("HadronTensorAlg");
+    const Registry * own = AlgConfigPool::Instance()->FindRegistry(unmasked.name, unmasked.config);
+    unmasked_differs = unmasked.name != main_alg.name ||
+      (unmasked.config != main_alg.config && own && own->NEntries() > 0);
+  }
+  if (unmasked_differs) {
+    fUnmaskedHadronTensorModel = dynamic_cast<const HadronTensorModelI *>(
+      this->SubAlg("UnmaskedHadronTensorAlg"));
+    if (!fUnmaskedHadronTensorModel) {
+      good_config = false;
+      LOG("Valencia2020MECPXSec", pERROR) << "UnmaskedHadronTensorAlg does not exist.";
+    }
   }
 
   fXSecIntegrator = dynamic_cast<const XSecIntegratorI *>(this->SubAlg("NumericalIntegrationAlg"));

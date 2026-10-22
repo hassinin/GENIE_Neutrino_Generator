@@ -15,6 +15,9 @@
 #ifndef _VALENCIA2020_MEC_PXSEC_H_
 #define _VALENCIA2020_MEC_PXSEC_H_
 
+#include <set>
+#include <utility>
+
 #include "Framework/EventGen/XSecAlgorithmI.h"
 #include "Physics/HadronTensors/HadronTensorModelI.h"
 #include "Physics/Common/XSecScaleI.h"
@@ -41,8 +44,14 @@ public:
   // TargetQValue (default) or the installed NuWro Valencia2020 prescription.
   double EnergyShift(const Interaction * i) const;
 
-  // One setting controls the contraction, exclusive weights and hadronizer.
+  // One setting controls the exclusive weights and hadronizer.
   bool NuWroCompatible() const { return fPreFSIPrescription == "NuWro"; }
+
+  // Off by default: every configuration uses the exact L_mu_nu W^mu_nu
+  // contraction, whose massive-lepton W4 term carries sin^2(theta/2).
+  // On: reproduce native NuWro's sin^2(theta) typo (mecevent_2020Valencia.cc,
+  // also mecevent_Nieves.cc and mecevent_SuSA.cc), for validation only.
+  bool NuWroW4SinTheta() const { return fNuWroW4SinTheta; }
 
   // Nonnegative effective channel cross sections, GeV^-3, including scales.
   // Default rescales positive partials; NuWro uses conditional channel draws.
@@ -61,6 +70,15 @@ public:
     const Interaction * i, double & pp, double & np, double & pn,
     double & three, double & total) const;
 
+  // Same, but always with the full (unmasked) Valencia tables, even when a
+  // channel-isolation overlay of Valencia2020HadronTensorModel.xml zeroes
+  // some channels.
+  // Used for the NuWro-compatible 3p3h Pauli flag, which in native NuWro
+  // depends on the physical 2p2h response.
+  void GetUnmaskedRawChannelCrossSections(
+    const Interaction * i, double & pp, double & np, double & pn,
+    double & three, double & total) const;
+
   // Override Algorithm::Configure
   void Configure (const Registry & config);
   void Configure (string config);
@@ -68,17 +86,34 @@ public:
 private:
 
   void LoadConfig (void);
+  void RawChannelCrossSections(const HadronTensorModelI * model,
+    const Interaction * i, double & pp, double & np, double & pn,
+    double & three, double & total) const;
+
+  // TargetQValue prescription: utils::mec::Qvalue needs the target and its
+  // CC daughter (Z+1 for nu, Z-1 for nubar) in the PDG table and exit()s
+  // otherwise. Checked once per (target, probe sign); cached below.
+  bool TargetQValueAvailable(int target_pdg, int probe_pdg) const;
 
   double fXSecCCScale;
-  double fXSecNCScale;
+  double fXSecNCScale;   // UNUSED: read for configuration compatibility only;
+                         // Valencia2020 is CC-only (ValidProcess requires CC)
   bool   fInclude3p3h;
+  bool   fNuWroW4SinTheta;
   string fEnergyShiftPrescription;
   string fPreFSIPrescription;
 
   const HadronTensorModelI * fHadronTensorModel;
+  const HadronTensorModelI * fUnmaskedHadronTensorModel; // == fHadronTensorModel unless configured
   const XSecIntegratorI *    fXSecIntegrator;
   const XSecScaleI *         fMECScaleAlg;
   const QvalueShifter *      fQvalueShifter;
+
+  // Per-target one-time bookkeeping (diagnostics only, no physics state).
+  // Keys: (target PDG, +1 nu / -1 nubar) for the Q-value daughter lookup.
+  mutable std::set<std::pair<int,int> > fQvalueTargetsOK;
+  mutable std::set<std::pair<int,int> > fQvalueTargetsMissing; // warned once
+  mutable std::set<int> fLightTargetsNotified; // A<9 -> C12 proxy notice
 };
 
 }       // genie namespace

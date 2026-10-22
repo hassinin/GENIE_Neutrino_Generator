@@ -12,6 +12,7 @@
 //____________________________________________________________________________
 
 #include <cstdlib>
+#include <iostream>
 #include <sstream>
 #include <exception>
 
@@ -380,6 +381,22 @@ void HG4BertCascIntranuke::TransportHadrons(GHepRecord * evrec) const
   GHepParticle* remNucl = evrec->RemnantNucleus();
   GHepParticle* struckNucleon = evrec->HitNucleon();
 
+  // The primaries are merged below into ONE Bertini bullet, labelled as a
+  // nucleon or a 2-nucleon cluster (G4Diproton/G4Dineutron/G4UnboundPN).
+  // There is no Geant4 3-nucleon bullet, so 3-nucleon MEC primaries
+  // (Valencia2020 3p3h, hit code kPdgClusterNNN..PPP) would be silently
+  // mislabelled. Stop at the first such event instead.
+  if (struckNucleon && pdg::Is3NucleonCluster(struckNucleon->Pdg())) {
+    LOG("HG4BertCascIntranuke", pFATAL)
+      << "Geant4 Bertini FSI cannot represent three-nucleon MEC primaries "
+      << "(hit 3-nucleon cluster PDG = " << struckNucleon->Pdg()
+      << ", e.g. Valencia2020 3p3h). Use hA2018, hN2018 or INCL FSI, "
+      << "or disable 3p3h (Include3p3h=false). Exiting.";
+    // exit() would run GENIE's global teardown with this algorithm on the
+    // stack (aborts, status 134); flush and leave with the intended status.
+    std::cerr << std::flush; std::_Exit(78);
+  }
+
   int inucl = evrec->RemnantNucleusPosition();
 
   //  double sepEnergy = tgtNucl->Mass() - remNucl->Mass() - struckNucleon->Mass();
@@ -491,6 +508,19 @@ void HG4BertCascIntranuke::TransportHadrons(GHepRecord * evrec) const
     if ( ! has_incidentparticle) {
       GHepParticle * pinN = evrec->Particle(pos_in_evrec);
       incidentDef=PDGtoG4Particle(pinN->Pdg()); // if no baryon among the secondaries
+    }
+    // Same limitation as at the top of TransportHadrons, for MEC events
+    // (nucleon-cluster hit) whose merged primaries hold 3 or more nucleons
+    // (only PP/NN/NP bullets exist). Non-MEC events are left unchanged.
+    if (struckNucleon && pdg::IsNucleonCluster(struckNucleon->Pdg()) &&
+        P + N >= 3) {
+      LOG("HG4BertCascIntranuke", pFATAL)
+        << "Geant4 Bertini FSI cannot represent three-nucleon MEC primaries ("
+        << P << " p + " << N << " n merged into one bullet, hit PDG = "
+        << struckNucleon->Pdg() << "). Use hA2018, hN2018 or INCL FSI. Exiting.";
+      // exit() would run GENIE's global teardown with this algorithm on the
+      // stack (aborts, status 134); flush and leave with the intended status.
+      std::cerr << std::flush; std::_Exit(78);
     }
     if (P == 2) incidentDef = PDGtoG4Particle(kPdgClusterPP);
     else if (N == 2) incidentDef = PDGtoG4Particle(kPdgClusterNN);

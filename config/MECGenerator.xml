@@ -33,6 +33,23 @@ MaxXSec-MinScanPointsCosth int      No         Number of scan points for Costh r
     <param type="double" name="Valencia2020-pn-P"> 0.80 </param>
     <param type="int" name="Valencia2020-pn-l"> 4 </param>
 
+    <!-- Valencia2020, Default pre-FSI prescription only. false: on-shell
+         initial nucleons and P_H = P_I + q, exactly as arXiv:2411.11523
+         Sect. III.2 and NuWro (no removal energy is charged; the residual
+         nucleus starts below its ground-state mass). true: GENIE-native
+         bookkeeping for use with FSI, as in the NSV branch: each initial
+         nucleon's NuclearModel removal energy is subtracted from the
+         hadronic system and credited to the residual nucleus. Changes
+         hadrons only: cross sections, splines, the MEC rate, channel
+         choice and lepton kinematics are unaffected. Events whose energy
+         transfer is too small to pay the removal energy (no hadronic
+         configuration in 20000 trials) are kept with the uncharged
+         construction and counted as "removal_energy_fallbacks" in the
+         end-of-job [Valencia2020 summary].
+         Ignored with Valencia2020MECPXSec/NuWroCompatible (native NuWro
+         bookkeeping). The G20_10v tune turns it on in config/G20_10v/MECGenerator.xml. -->
+    <param type="bool" name="Valencia2020-RemovalEnergy"> false </param>
+
     <!-- <param type="double" name="SuSA-MaxXSec-DiffTolerance"> 0.0 </param> -->
     
     <param type="double" name="MaxXSec-SafetyFactor"> 1.5 </param>

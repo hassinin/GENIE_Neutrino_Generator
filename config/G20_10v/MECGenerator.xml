@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+
+<alg_conf>
+
+<!-- G20_10v tune override of config/MECGenerator.xml: identical except
+     Valencia2020-RemovalEnergy = true. Keep the rest in sync with the global file. -->
+
+<!--
+Configuration for MECGenerator
+
+Configurable Parameters:
+.......................................................................................................
+Name                       Type     Optional   Comment                                      Default
+NSV-Q3Max                  double   No         Q3 max for 2p2h model                        CommonParam[MultiNucleons]
+MaxXSec-SafetyFactor       double   Yes        Safety factor applied to the max xsec value  1.6
+MaxXSec-FunctionCalls      int      No         Maximum number of function calls to find the 
+                                               cross section maximum 
+MaxXSec-RelativeTolerance  double   No         Relative tolerance for the minuit minimization
+MaxXSec-MinScanPointsTmu   int      No         Number of scan points for Tmu required for the minimization of d2XSec/dTmudCosth  
+MaxXSec-MinScanPointsCosth int      No         Number of scan points for Costh required for the minimization of d2XSec/dTmudCosth  
+.........................................................................................................................
+-->
+
+  <param_set name="Default"> 
+    
+    <param type="string" name="CommonParam"> MultiNucleons </param>
+    
+    <param type="alg" name="NuclearModel"> genie::NuclearModelMap/Default </param>
+    <param type="alg" name="Valencia2020-VertexGenerator"> genie::VertexGenerator/Default </param>
+
+    <!-- arXiv:2411.11523 global angular fits; only used by Valencia2020. -->
+    <param type="double" name="Valencia2020-pp-P"> 0.77 </param>
+    <param type="int" name="Valencia2020-pp-l"> 4 </param>
+    <param type="double" name="Valencia2020-np-P"> 0.70 </param>
+    <param type="int" name="Valencia2020-np-l"> 3 </param>
+    <param type="double" name="Valencia2020-pn-P"> 0.80 </param>
+    <param type="int" name="Valencia2020-pn-l"> 4 </param>
+
+    <!-- Valencia2020, Default pre-FSI prescription only. false: on-shell
+         initial nucleons and P_H = P_I + q, exactly as arXiv:2411.11523
+         Sect. III.2 and NuWro (no removal energy is charged; the residual
+         nucleus starts below its ground-state mass). true: GENIE-native
+         bookkeeping for use with FSI, as in the NSV branch: each initial
+         nucleon's NuclearModel removal energy is subtracted from the
+         hadronic system and credited to the residual nucleus. Changes
+         hadrons only: cross sections, splines, the MEC rate, channel
+         choice and lepton kinematics are unaffected. Events whose energy
+         transfer is too small to pay the removal energy (no hadronic
+         configuration in 20000 trials) are kept with the uncharged
+         construction and counted as "removal_energy_fallbacks" in the
+         end-of-job [Valencia2020 summary].
+         Ignored with Valencia2020MECPXSec/NuWroCompatible (native NuWro
+         bookkeeping). The G20_10v tune turns it on in config/G20_10v/MECGenerator.xml. -->
+    <param type="bool" name="Valencia2020-RemovalEnergy"> true </param>
+
+    <!-- <param type="double" name="SuSA-MaxXSec-DiffTolerance"> 0.0 </param> -->
+    
+    <param type="double" name="MaxXSec-SafetyFactor"> 1.5 </param>
+    <param type="int" name="MaxXSec-FunctionCalls"> 1000 </param>
+    <param type="double" name="MaxXSec-RelativeTolerance"> 0.8 </param>
+    <param type="int" name="MaxXSec-MinScanPointsTmu" > 120 </param>
+    <param type="int" name="MaxXSec-MinScanPointsCosth" > 100 </param>
+     
+  </param_set>
+  
+</alg_conf>

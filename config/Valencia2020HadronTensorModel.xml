@@ -33,4 +33,10 @@
 
   </param_set>
 
+  <!-- Full tables. Identical to Default here (inherits it). A channel-isolation
+       GXMLPATH overlay of this file, which points some channels at a zero table,
+       must define this set with the real files. -->
+  <param_set name="Unmasked">
+  </param_set>
+
 </alg_conf>

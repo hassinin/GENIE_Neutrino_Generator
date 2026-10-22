@@ -40,18 +40,7 @@ PDGLibrary * PDGLibrary::fInstance = 0;
 PDGLibrary::PDGLibrary()
 {
   if( ! LoadDBase() ) LOG("PDG", pERROR) << "Could not load PDG data";
-
-  // Register even when an external PDG catalogue is selected, so ROOT event
-  // readback and FSI can resolve the new charge-specific MEC clusters.
-  const double mp = fDatabasePDG->GetParticle(kPdgProton)->Mass();
-  const double mn = fDatabasePDG->GetParticle(kPdgNeutron)->Mass();
-  const char* names[] = {"NNN_cluster", "NNP_cluster", "NPP_cluster", "PPP_cluster"};
-  for (int z = 0; z <= 3; ++z) {
-    if (!fDatabasePDG->GetParticle(kPdgClusterNNN + z)) {
-      fDatabasePDG->AddParticle(names[z], names[z], z*mp + (3-z)*mn,
-        true, 0., 3.*z, "NucleonCluster", kPdgClusterNNN + z);
-    }
-  }
+  this->AddNucleonClusters();
 
 #ifdef __GENIE_DARK_NEUTRINO_ENABLED__
   LOG("PDG", pINFO) << "Loading Dark sector Info";
@@ -240,5 +229,36 @@ void PDGLibrary::ReloadDBase(void)
   }
 
   if( ! LoadDBase() ) LOG("PDG", pERROR) << "Could not load PDG data";
+  // The catalogue file does not contain the charge-resolved 3-nucleon
+  // clusters; re-register them so 3p3h generation/readback survives a reload.
+  this->AddNucleonClusters();
+}
+//____________________________________________________________________________
+void PDGLibrary::AddNucleonClusters(void)
+{
+  // Register even when an external PDG catalogue is selected, so ROOT event
+  // readback and FSI can resolve the charge-specific 3-nucleon MEC clusters
+  // (kPdgClusterNNN..kPdgClusterPPP, used by Valencia2020 3p3h).
+  if (!fDatabasePDG) return;
+  // A custom $GENIE_PDG_TABLE may lack the nucleons: do not dereference null.
+  // Without the clusters, Valencia2020 3p3h events cannot be generated/read.
+  const TParticlePDG * proton  = fDatabasePDG->GetParticle(kPdgProton);
+  const TParticlePDG * neutron = fDatabasePDG->GetParticle(kPdgNeutron);
+  if (!proton || !neutron) {
+    LOG("PDG", pERROR)
+      << "Proton (" << kPdgProton << ") and/or neutron (" << kPdgNeutron
+      << ") missing from the PDG table: 3-nucleon cluster codes "
+      << kPdgClusterNNN << ".." << kPdgClusterPPP << " NOT registered";
+    return;
+  }
+  const double mp = proton->Mass();
+  const double mn = neutron->Mass();
+  const char* names[] = {"NNN_cluster", "NNP_cluster", "NPP_cluster", "PPP_cluster"};
+  for (int z = 0; z <= 3; ++z) {
+    if (!fDatabasePDG->GetParticle(kPdgClusterNNN + z)) {
+      fDatabasePDG->AddParticle(names[z], names[z], z*mp + (3-z)*mn,
+        true, 0., 3.*z, "NucleonCluster", kPdgClusterNNN + z);
+    }
+  }
 }
 //____________________________________________________________________________

@@ -241,6 +241,11 @@ string          gOptInpXSecFile;  // cross-section splines
 string          gOptOutFileName;  // Optional outfile name
 string          gOptStatFileName; // Status file name, set if gOptOutFileName was set.
 
+// Stop (and still save the output) after this many consecutive failed events;
+// each failed event already spans GEVGDriver's recursive regeneration attempts.
+const int       kMaxConsecutiveFailedEvents = 20;
+bool            gStoppedEarly = false;
+
 //____________________________________________________________________________
 int main(int argc, char ** argv)
 {
@@ -267,7 +272,9 @@ int main(int argc, char ** argv)
   } else {
      GenerateEventsAtFixedInitState();
   }
-  return 0;
+  // Output was saved either way; a non-zero status tells scripts the
+  // requested number of events was not reached.
+  return gStoppedEarly ? 1 : 0;
 }
 //____________________________________________________________________________
 void Initialize()
@@ -332,6 +339,7 @@ void GenerateEventsAtFixedInitState(void)
 
   // Generate events / print the GHEP record / add it to the ntuple
   int ievent = 0;
+  int consecutive_failures = 0;
   while (ievent < gOptNevents) {
      LOG("gevgen", pNOTICE)
         << " *** Generating event............ " << ievent;
@@ -342,8 +350,16 @@ void GenerateEventsAtFixedInitState(void)
      if(!event) {
         LOG("gevgen", pNOTICE)
           << "Last attempt failed. Re-trying....";
+        if (++consecutive_failures >= kMaxConsecutiveFailedEvents) {
+          LOG("gevgen", pFATAL) << consecutive_failures
+            << " consecutive events could not be generated at this initial state;"
+            << " stopping and saving the " << ievent << " events generated so far.";
+          gStoppedEarly = true;
+          break;
+        }
         continue;
      }
+     consecutive_failures = 0;
 
      LOG("gevgen", pNOTICE)
         << "Generated Event GHEP Record: " << *event;
@@ -403,12 +419,25 @@ void GenerateEventsUsingFluxOrTgtMix(void)
 
   // Generate events / print the GHEP record / add it to the ntuple
   int ievent = 0;
+  int consecutive_failures = 0;
   while ( ievent < gOptNevents) {
 
      LOG("gevgen", pNOTICE) << " *** Generating event............ " << ievent;
 
      // generate a single event for neutrinos coming from the specified flux
      EventRecord * event = mcj_driver->GenerateEvent();
+     if(!event) {
+        LOG("gevgen", pNOTICE) << "Last attempt failed. Re-trying....";
+        if (++consecutive_failures >= kMaxConsecutiveFailedEvents) {
+          LOG("gevgen", pFATAL) << consecutive_failures
+            << " consecutive events could not be generated;"
+            << " stopping and saving the " << ievent << " events generated so far.";
+          gStoppedEarly = true;
+          break;
+        }
+        continue;
+     }
+     consecutive_failures = 0;
 
      LOG("gevgen", pNOTICE) << "Generated Event GHEP Record: " << *event;
 

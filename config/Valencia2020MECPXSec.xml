@@ -10,6 +10,7 @@
   <param_set name="Default">
 
     <param type="double" name="MEC-CC-XSecScale"> 1.000 </param>
+    <!-- UNUSED: Valencia2020 is CC-only; kept for configuration compatibility. -->
     <param type="double" name="MEC-NC-XSecScale"> 1.000 </param>
     <param type="bool"   name="Include3p3h">      true  </param>
 
@@ -20,7 +21,17 @@
     <param type="string" name="EnergyShiftPrescription"> TargetQValue </param>
     <param type="string" name="PreFSIPrescription"> GENIE </param>
 
+    <!-- false: exact lepton-tensor contraction, sin^2(theta/2) in the
+         massive-lepton W4 term (correct; used by every named set below
+         except NuWroNativeW4). true: native NuWro's sin^2(theta) typo,
+         for event-by-event comparison with NuWro only.
+         Regenerate splines whenever this setting changes. -->
+    <param type="bool"   name="NuWroW4SinTheta"> false </param>
+
     <param type="alg" name="HadronTensorAlg">        genie::Valencia2020HadronTensorModel/Default </param>
+    <!-- Full tables even under a channel-isolation overlay; used only for the
+         NuWroCompatible 3p3h Pauli flag (native NuWro uses the physical 2p2h). -->
+    <param type="alg" name="UnmaskedHadronTensorAlg"> genie::Valencia2020HadronTensorModel/Unmasked </param>
     <param type="alg" name="NumericalIntegrationAlg"> genie::MECXSec/Default                      </param>
 
   </param_set>
@@ -37,6 +48,14 @@
   <param_set name="NuWroCompatible">
     <param type="string" name="EnergyShiftPrescription"> NuWro </param>
     <param type="string" name="PreFSIPrescription"> NuWro </param>
+  </param_set>
+
+  <!-- NuWroCompatible plus native NuWro's sin^2(theta) W4 typo. Use only to
+       reproduce NuWro output exactly; not for physics production. -->
+  <param_set name="NuWroNativeW4">
+    <param type="string" name="EnergyShiftPrescription"> NuWro </param>
+    <param type="string" name="PreFSIPrescription"> NuWro </param>
+    <param type="bool"   name="NuWroW4SinTheta"> true </param>
   </param_set>
 
 </alg_conf>

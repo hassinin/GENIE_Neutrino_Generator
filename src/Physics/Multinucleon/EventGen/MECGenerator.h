@@ -72,6 +72,14 @@ private:
   Valencia2020Selection SelectValencia2020LeptonKinematics(GHepRecord * event) const;
   void GenerateValencia2020Hadrons(GHepRecord * event,
                                    const Valencia2020Selection& selection) const;
+  // Dense brute-force bound of the lepton (Tl, cos) density over the sampled
+  // box; used when the layered scan returns zero or is exceeded.
+  double Valencia2020DenseEnvelope(const Interaction & in, double TMin,
+                                   double TMax, double CosthMin, double q3max) const;
+  // Mark the event unphysical, count it, and skip it via a fast-forward
+  // EVGThreadException. Stops the job after too many consecutive skips.
+  void SkipValencia2020Event(GHepRecord * event, int flag, const std::string & reason) const;
+  void PrintValencia2020Summary(void) const; // end-of-job counts (stderr)
   PDGCodeList NucleonClusterConstituents    (int pdgc)           const;
 
   // Helper function that computes the maximum differential cross section
@@ -93,6 +101,25 @@ private:
   double fValenciaP[3];
   int fValenciaL[3];
   mutable std::map<std::tuple<int,int,double,const XSecAlgorithmI*>,double> fValenciaMaxima;
+  // GENIE-native energy bookkeeping (Default prescription only): charge each
+  // initial nucleon's nuclear-model removal energy to the hadronic system and
+  // credit it to the residual nucleus, as the NSV branch does. Off by default.
+  bool fValenciaRemovalEnergy;
+  // Bookkeeping, printed in an end-of-job summary (destructor).
+  mutable unsigned long fValenciaGenerated = 0;        // events hadronized
+  mutable unsigned long fValenciaSkipped = 0;          // events discarded (all reasons)
+  mutable unsigned long fValenciaSkippedHadronic = 0;  // ... of which hadronic exhaustion
+  mutable unsigned long fValenciaConsecutiveSkips = 0;
+  mutable unsigned long fValenciaRemovalCharged = 0;   // removal energy charged
+  mutable unsigned long fValenciaRemovalFallbacks = 0; // q too small to pay it
+  mutable unsigned long fValenciaEnvelopeRaises = 0;
+  mutable unsigned long fValenciaDenseFallbacks = 0;
+  // Multiplies new layered envelopes after any underestimate was seen
+  // (continuous-energy beams never reuse a cached envelope).
+  mutable double fValenciaEnvelopeInflation = 1.;
+  mutable bool fValenciaRemovalIgnored = false; // option set but NuWroCompatible selected
+  mutable unsigned long fValenciaNuWro3p3h = 0;      // NuWroCompatible 3p3h events
+  mutable unsigned long fValenciaNuWro3p3hPauli = 0; // ... with the inherited CM Pauli flag on
 
   // Tolerate this maximum percent deviation above the calculated maximum cross
   // section when sampling lepton kinematics for the SuSAv2-MEC model.
