@@ -1,6 +1,6 @@
 //____________________________________________________________________________
 /*
- Copyright (c) 2003-2025, The GENIE Collaboration
+ Copyright (c) 2003-2026, The GENIE Collaboration
  For the full text of the license visit http://copyright.genie-mc.org
 
 
@@ -34,7 +34,7 @@
 #include "Framework/GHEP/GHepParticle.h"
 #include "Physics/HadronTransport/Intranuke2025.h"
 #include "Physics/HadronTransport/INukeHadroData2025.h"
-#include "Physics/HadronTransport/INukeHadroFates.h"
+#include "Physics/HadronTransport/INukeHadroFates2018.h"
 #include "Physics/HadronTransport/INukeMode.h"
 #include "Physics/HadronTransport/INukeUtils2025.h"
 #include "Framework/Interaction/Interaction.h"
@@ -284,6 +284,7 @@ void Intranuke2025::TransportHadrons(GHepRecord * evrec) const
 
     // Set clone's mom to be the hadron that was cloned
     sp->SetFirstMother(icurr);
+    sp->SetLastMother(-1);  // in case mother had 2 mothers
 
     // Check whether the particle can be rescattered
     if(!this->CanRescatter(sp)) {
@@ -292,6 +293,7 @@ void Intranuke2025::TransportHadrons(GHepRecord * evrec) const
        LOG("Intranuke2025", pNOTICE)
               << "... Current version can't rescatter a " << sp->Name();
        sp->SetFirstMother(icurr);
+       sp->SetLastMother(-1);  // in case mother had 2 mothers
        sp->SetStatus(kIStStableFinalState);
        evrec->AddParticle(*sp);
        delete sp;

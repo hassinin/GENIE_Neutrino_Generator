@@ -13,7 +13,7 @@
 
 \created  Sep. 22, 2008
 
-\cpright  Copyright (c) 2003-2025, The GENIE Collaboration
+\cpright  Copyright (c) 2003-2026, The GENIE Collaboration
           For the full text of the license visit http://copyright.genie-mc.org
 */
 //____________________________________________________________________________
@@ -64,6 +64,7 @@ private:
   void    DecayNucleonCluster               (GHepRecord * event) const;
   void    SelectNSVLeptonKinematics         (GHepRecord * event) const;
   void    SelectSuSALeptonKinematics        (GHepRecord * event) const;
+  void    SelectMartiniLeptonKinematics     (GHepRecord * event) const;
   void    GenerateNSVInitialHadrons         (GHepRecord * event) const;
   struct Valencia2020Selection {
     int channel; // pp=0, np=1, pn=2, 3p3h=3; labels are charge-conjugated for antinu

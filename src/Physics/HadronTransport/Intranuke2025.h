@@ -22,7 +22,7 @@
 
 \created  September 20, 2025
 
-\cpright  Copyright (c) 2003-2025, The GENIE Collaboration
+\cpright  Copyright (c) 2003-2026, The GENIE Collaboration
           For the full text of the license visit http://copyright.genie-mc.org
 
 	Sepr 2025:  MI, SD: copied from Intranuke2018.h with no modifications except labels
@@ -40,7 +40,7 @@
 #include "Framework/EventGen/EventRecordVisitorI.h"
 #include "Framework/Conventions/GMode.h"
 #include "Physics/HadronTransport/INukeMode.h"
-#include "Physics/HadronTransport/INukeHadroFates2025.h"
+#include "Physics/HadronTransport/INukeHadroFates2018.h"
 
 class TLorentzVector;
 class TVector3;
@@ -154,6 +154,10 @@ protected:
   double       fNucleonFracInelScale;
   double       fNucleonFracAbsScale;
   double       fNucleonFracPiProdScale;
+
+  /// Bias parameter used to adjust pion production distribution away from pure
+  /// three-body phase space
+  double       fPiProdThreeBodyBias;
 
 };
 

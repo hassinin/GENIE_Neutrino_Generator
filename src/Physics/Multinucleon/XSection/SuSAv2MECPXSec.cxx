@@ -1,6 +1,6 @@
 //_________________________________________________________________________
 /*
- Copyright (c) 2003-2025, The GENIE Collaboration
+ Copyright (c) 2003-2026, The GENIE Collaboration
  For the full text of the license visit http://copyright.genie-mc.org
  or see $GENIE/LICENSE
 
@@ -44,6 +44,14 @@ double SuSAv2MECPXSec::XSec(const Interaction* interaction,
   // Don't try to do the calculation if we've been handed an interaction that
   // doesn't make sense
   if ( !this->ValidProcess(interaction) ) return 0.;
+
+  if ( kps != kPSTlctl ) {
+    LOG("SuSAv2MEC", pWARN)
+      << "Doesn't support transformation from "
+      << KinePhaseSpace::AsString(kPSTlctl) << " to "
+      << KinePhaseSpace::AsString(kps);
+    return 0.;
+  }
 
   // Get the hadron tensor for the selected nuclide. Check the probe PDG code
   // to know whether to use the tensor for CC neutrino scattering or for
@@ -158,14 +166,6 @@ double SuSAv2MECPXSec::XSec(const Interaction* interaction,
 
   // Scale given a scaling algorithm:
   if( fMECScaleAlg ) xsec *= fMECScaleAlg->GetScaling( * interaction ) ;
-
-  if ( kps != kPSTlctl ) {
-    LOG("SuSAv2MEC", pWARN)
-      << "Doesn't support transformation from "
-      << KinePhaseSpace::AsString(kPSTlctl) << " to "
-      << KinePhaseSpace::AsString(kps);
-    xsec = 0.;
-  }
 
   return xsec;
 }

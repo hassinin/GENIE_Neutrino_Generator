@@ -20,7 +20,7 @@
 
 \created   Mar 03, 2009
 
-\cpright   Copyright (c) 2003-2025, The GENIE Collaboration
+\cpright   Copyright (c) 2003-2026, The GENIE Collaboration
            For the full text of the license visit http://copyright.genie-mc.org
 
 */
@@ -32,7 +32,7 @@
 #include <TGenPhaseSpace.h>
 
 #include "Physics/NuclearState/NuclearModelI.h"
-#include "Physics/HadronTransport/INukeHadroFates2025.h"
+#include "Physics/HadronTransport/INukeHadroFates2018.h"
 #include "Physics/HadronTransport/INukeMode.h"
 #include "Physics/HadronTransport/INukeNucleonCorr.h"
 
@@ -89,11 +89,11 @@ namespace intranuke2025
 
   bool ThreeBodyKinematics(
     GHepRecord* ev, GHepParticle* p, int tcode, GHepParticle* s1, GHepParticle* s2, GHepParticle* s3,
-    bool DoFermi=false, double FermiFac=0, double FermiMomentum=0, const NuclearModelI* Nuclmodel=(const NuclearModelI*)0);
+    bool DoFermi=false, double FermiFac=0, double FermiMomentum=0, const NuclearModelI* Nuclmodel=(const NuclearModelI*)0, double bias=0);
 
   bool PionProduction(
     GHepRecord* ev, GHepParticle* p, GHepParticle* s1, GHepParticle* s2, GHepParticle* s3, int &RemnA, int &RemnZ,
-    TLorentzVector &RemnP4,bool DoFermi, double FermiFac, double FermiMomentum, const NuclearModelI* Nuclmodel);
+    TLorentzVector &RemnP4,bool DoFermi, double FermiFac, double FermiMomentum, const NuclearModelI* Nuclmodel, double bias);
 
   double CalculateEta(
     double Minc, double ke, double Mtarg, double Mtwopart, double Mpi);
