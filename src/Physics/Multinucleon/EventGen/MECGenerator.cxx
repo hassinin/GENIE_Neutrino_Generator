@@ -1733,7 +1733,6 @@ MECGenerator::SelectValencia2020LeptonKinematics(GHepRecord* event) const
       kinematics->SetKV(kKVTl, T);
       kinematics->SetKV(kKVctl, Costh);
 
-      const Valencia2020MECPXSec* vXSec = dynamic_cast<const Valencia2020MECPXSec*>(fXSecModel);
       double x_pp = 0., x_np = 0., x_pn = 0., x_3p3h = 0., x_tot = 0.;
       if (vXSec) {
         vXSec->GetChannelCrossSections(interaction, x_pp, x_np, x_pn, x_3p3h, x_tot);
